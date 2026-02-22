@@ -540,6 +540,11 @@ export function getManagedAgentSession(agentId) {
   }
 }
 
+// Internal runtime accessor for server-side plugins that need the live AgentConnection.
+export function getManagedAgentRuntime(agentId) {
+  return agentSessions.get(agentId) || null
+}
+
 export function listManagedAgentSessions() {
   const list = []
   for (const [id, session] of agentSessions) {

@@ -1,5 +1,6 @@
 import {
   despawnManagedAgentSession,
+  getManagedAgentRuntime,
   getManagedAgentSession,
   listManagedAgentSessions,
   speakManagedAgent,
@@ -152,6 +153,21 @@ function loadConfig() {
       agentAvatar: process.env.OPENCLAW_GATEWAY_AGENT_AVATAR || process.env.HYPERFY_AGENT_AVATAR || undefined,
       maxChatLength: MAX_CHAT_LENGTH,
       tag: 'openclaw-gateway',
+      idleWander: {
+        enabled:
+          parseBool(process.env.OPENCLAW_GATEWAY_IDLE_WANDER) ||
+          parseBool(process.env.HYPERFY_IDLE_WANDER),
+        afterMs: Math.max(0, Number(process.env.OPENCLAW_GATEWAY_IDLE_AFTER_MS || process.env.HYPERFY_IDLE_AFTER_MS || 30000) || 30000),
+        intervalMs: Math.max(1000, Number(process.env.OPENCLAW_GATEWAY_IDLE_WANDER_INTERVAL_MS || process.env.HYPERFY_IDLE_WANDER_INTERVAL_MS || 20000) || 20000),
+        jitterMs: Math.max(0, Number(process.env.OPENCLAW_GATEWAY_IDLE_WANDER_JITTER_MS || process.env.HYPERFY_IDLE_WANDER_JITTER_MS || 12000) || 12000),
+        minRadius: Math.max(0.5, Number(process.env.OPENCLAW_GATEWAY_IDLE_WANDER_MIN_RADIUS || process.env.HYPERFY_IDLE_WANDER_MIN_RADIUS || 2) || 2),
+        maxRadius: Math.max(1, Number(process.env.OPENCLAW_GATEWAY_IDLE_WANDER_MAX_RADIUS || process.env.HYPERFY_IDLE_WANDER_MAX_RADIUS || 6) || 6),
+        arrivalRadius: Math.max(0.5, Number(process.env.OPENCLAW_GATEWAY_IDLE_WANDER_ARRIVAL_RADIUS || process.env.HYPERFY_IDLE_WANDER_ARRIVAL_RADIUS || 2.5) || 2.5),
+        timeoutMs: Math.max(1000, Number(process.env.OPENCLAW_GATEWAY_IDLE_WANDER_TIMEOUT_MS || process.env.HYPERFY_IDLE_WANDER_TIMEOUT_MS || 12000) || 12000),
+        run:
+          parseBool(process.env.OPENCLAW_GATEWAY_IDLE_WANDER_RUN) ||
+          parseBool(process.env.HYPERFY_IDLE_WANDER_RUN),
+      },
     },
     openclaw: {
       hookUrl: required('OPENCLAW_HOOK_URL'),
@@ -292,6 +308,9 @@ export async function openClawGatewayPlugin(fastify) {
     lastSpawnAt: null,
     lastForwardAt: null,
     lastError: null,
+    lastInteractionAt: Date.now(),
+    idleWanderTimer: null,
+    idleWanderInFlight: false,
     shuttingDown: false,
   }
 
@@ -300,9 +319,14 @@ export async function openClawGatewayPlugin(fastify) {
     state.queue.push(text)
   }
 
-  const findVisiblePlayer = (session, { playerId, playerName }) => {
-    if (!session?.agent || session.agent.status !== 'connected') return null
-    const players = session.agent.getAllPlayers?.() || []
+  const markInteraction = source => {
+    state.lastInteractionAt = Date.now()
+    logger.debug({ source, at: state.lastInteractionAt }, 'Gateway interaction activity')
+  }
+
+  const findVisiblePlayer = (runtimeSession, { playerId, playerName }) => {
+    if (!runtimeSession?.agent || runtimeSession.agent.status !== 'connected') return null
+    const players = runtimeSession.agent.getAllPlayers?.() || []
     if (playerId) {
       const foundById = players.find(p => !p.isLocal && p.id === playerId)
       if (foundById) return foundById
@@ -317,16 +341,16 @@ export async function openClawGatewayPlugin(fastify) {
 
   const navigateAgentTowardPlayer = ({ playerId, playerName, source }) => {
     if (!state.agentId) return
-    const session = getManagedAgentSession(state.agentId)
-    if (!session || session.status !== 'connected') return
-    const agent = session.agent
-    const target = findVisiblePlayer(session, { playerId, playerName })
+    const runtime = getManagedAgentRuntime(state.agentId)
+    if (!runtime || runtime.agent.status !== 'connected') return
+    const agent = runtime.agent
+    const target = findVisiblePlayer(runtime, { playerId, playerName })
     if (!target?.position) {
       logger.debug({ source, playerId, playerName }, 'Could not resolve player to approach')
       return
     }
     const getTargetPos = () => {
-      const fresh = findVisiblePlayer(getManagedAgentSession(state.agentId), { playerId, playerName })
+      const fresh = findVisiblePlayer(getManagedAgentRuntime(state.agentId), { playerId, playerName })
       return fresh?.position || null
     }
     agent.navigateTo(target.position.x, target.position.z, {
@@ -350,6 +374,72 @@ export async function openClawGatewayPlugin(fastify) {
       logger.debug({ source, playerId, playerName, err: err?.message || String(err) }, 'Speaker approach failed')
     })
     logger.debug({ source, playerId, playerName }, 'Approaching speaker')
+  }
+
+  const randomBetween = (min, max) => {
+    if (max <= min) return min
+    return min + Math.random() * (max - min)
+  }
+
+  const scheduleIdleWander = reason => {
+    if (!config.hyperfy.idleWander.enabled) return
+    if (state.shuttingDown) return
+    if (state.idleWanderTimer) return
+    const delay = config.hyperfy.idleWander.intervalMs + Math.round(Math.random() * config.hyperfy.idleWander.jitterMs)
+    state.idleWanderTimer = setTimeout(() => {
+      state.idleWanderTimer = null
+      void maybeIdleWander(`timer:${reason}`)
+    }, delay)
+  }
+
+  const maybeIdleWander = async reason => {
+    try {
+      if (!config.hyperfy.idleWander.enabled) return
+      if (state.shuttingDown || state.spawning || state.reconnectTimer) return
+      if (!state.agentId || state.idleWanderInFlight) return
+      if (state.queue.length) return
+
+      const idleForMs = Date.now() - state.lastInteractionAt
+      if (idleForMs < config.hyperfy.idleWander.afterMs) {
+        logger.debug({ reason, idleForMs }, 'Skipping idle wander; idle threshold not reached')
+        return
+      }
+
+      const runtime = getManagedAgentRuntime(state.agentId)
+      if (!runtime || runtime.agent.status !== 'connected') return
+      const agent = runtime.agent
+      const pos = agent.getPosition?.()
+      if (!pos) return
+
+      const minR = Math.min(config.hyperfy.idleWander.minRadius, config.hyperfy.idleWander.maxRadius)
+      const maxR = Math.max(config.hyperfy.idleWander.minRadius, config.hyperfy.idleWander.maxRadius)
+      const radius = randomBetween(minR, maxR)
+      const angle = Math.random() * Math.PI * 2
+      const x = pos.x + Math.cos(angle) * radius
+      const z = pos.z + Math.sin(angle) * radius
+
+      state.idleWanderInFlight = true
+      logger.debug({ reason, from: pos, x, z, radius, idleForMs }, 'Starting idle wander')
+      const result = await agent.navigateTo(x, z, {
+        run: !!config.hyperfy.idleWander.run,
+        arrivalRadius: config.hyperfy.idleWander.arrivalRadius,
+        timeout: config.hyperfy.idleWander.timeoutMs,
+      })
+      logger.debug(
+        {
+          reason,
+          arrived: !!result?.arrived,
+          distance: result?.distance ?? null,
+          error: result?.error ?? null,
+        },
+        'Idle wander finished'
+      )
+    } catch (err) {
+      logger.debug({ reason, err: err?.message || String(err) }, 'Idle wander failed')
+    } finally {
+      state.idleWanderInFlight = false
+      scheduleIdleWander('post_idle_wander')
+    }
   }
 
   const scheduleReconnect = reason => {
@@ -380,7 +470,10 @@ export async function openClawGatewayPlugin(fastify) {
       state.queue.shift()
       sent += 1
     }
-    if (sent) logger.info({ chunks: sent, remaining: state.queue.length }, 'Flushed outbound queue to Hyperfy')
+    if (sent) {
+      logger.info({ chunks: sent, remaining: state.queue.length }, 'Flushed outbound queue to Hyperfy')
+      markInteraction('flush_queue')
+    }
   }
 
   const reconcileGatewayAgents = reason => {
@@ -423,6 +516,7 @@ export async function openClawGatewayPlugin(fastify) {
     const reconciled = reconcileGatewayAgents(reason)
     if (reconciled?.status === 'connected') {
       flushQueue()
+      scheduleIdleWander('ensure_existing_connected')
       return
     }
 
@@ -430,6 +524,7 @@ export async function openClawGatewayPlugin(fastify) {
       const existing = getManagedAgentSession(state.agentId)
       if (existing?.status === 'connected') {
         flushQueue()
+        scheduleIdleWander('ensure_current_connected')
         return
       }
       if (!existing) state.agentId = null
@@ -456,6 +551,7 @@ export async function openClawGatewayPlugin(fastify) {
       state.agentId = spawned.id
       state.lastSpawnAt = new Date().toISOString()
       state.lastError = null
+      markInteraction('spawn_ready')
       state.reconnectDelayMs = config.reconnectMinMs
       logger.info({ agentId: spawned.id, displayName: spawned.displayName }, 'OpenClaw gateway agent ready')
     } catch (err) {
@@ -466,6 +562,7 @@ export async function openClawGatewayPlugin(fastify) {
       state.spawning = false
     }
     flushQueue()
+    scheduleIdleWander('ensure_done')
   }
 
   const forwardChatEvent = async event => {
@@ -480,6 +577,7 @@ export async function openClawGatewayPlugin(fastify) {
     }
     dedupe.add(key)
     try {
+      markInteraction('inbound_chat')
       if (config.openclaw.approachSpeaker) {
         navigateAgentTowardPlayer({
           playerId: event.fromId,
@@ -512,6 +610,9 @@ export async function openClawGatewayPlugin(fastify) {
         lastSpawnAt: state.lastSpawnAt,
         lastForwardAt: state.lastForwardAt,
         lastError: state.lastError,
+        lastInteractionAt: new Date(state.lastInteractionAt).toISOString(),
+        idleWanderEnabled: !!config.hyperfy.idleWander.enabled,
+        idleWanderInFlight: !!state.idleWanderInFlight,
       },
       hyperfyAgent: agent,
     }
@@ -544,6 +645,7 @@ export async function openClawGatewayPlugin(fastify) {
     if (!text.trim()) {
       return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'text is required' })
     }
+    markInteraction('outbound_reply')
 
     if (config.openclaw.approachOnOutbound) {
       const target = parseHyperfyPlayerTarget(body?.metadata?.to)
@@ -576,6 +678,10 @@ export async function openClawGatewayPlugin(fastify) {
       clearTimeout(state.reconnectTimer)
       state.reconnectTimer = null
     }
+    if (state.idleWanderTimer) {
+      clearTimeout(state.idleWanderTimer)
+      state.idleWanderTimer = null
+    }
     unsubscribe()
     if (state.agentId) {
       despawnManagedAgentSession(state.agentId, 'server_shutdown')
@@ -586,6 +692,7 @@ export async function openClawGatewayPlugin(fastify) {
   setTimeout(() => {
     void ensureGatewayAgent('startup')
   }, 0)
+  scheduleIdleWander('startup')
 
   logger.info({ routePrefix: config.routePrefix }, 'OpenClaw gateway plugin registered')
 }
