@@ -13,6 +13,7 @@ import statics from '@fastify/static'
 import multipart from '@fastify/multipart'
 
 import { createServerWorld } from '../core/createServerWorld'
+import { agentManagerPlugin } from '../xyz/agents/index.js'
 import { hashFile } from '../core/utils-server'
 import { getDB } from './db'
 import { Storage } from './Storage'
@@ -92,6 +93,7 @@ fastify.register(multipart, {
 })
 fastify.register(ws)
 fastify.register(worldNetwork)
+fastify.register(agentManagerPlugin, { world })
 
 const publicEnvs = {}
 for (const key in process.env) {
