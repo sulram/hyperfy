@@ -13,7 +13,8 @@ import statics from '@fastify/static'
 import multipart from '@fastify/multipart'
 
 import { createServerWorld } from '../core/createServerWorld'
-import { agentManagerPlugin } from '../xyz/agents/index.js'
+import { agentManagerPlugin, listManagedAgentSessions } from '../xyz/agents/index.js'
+import { openClawGatewayPlugin } from '../xyz/openclaw-hyperfy-channel/serverPlugin.js'
 import { hashFile } from '../core/utils-server'
 import { getDB } from './db'
 import { Storage } from './Storage'
@@ -94,6 +95,9 @@ fastify.register(multipart, {
 fastify.register(ws)
 fastify.register(worldNetwork)
 fastify.register(agentManagerPlugin, { world })
+if (['1', 'true', 'yes', 'on'].includes(String(process.env.ENABLE_OPENCLAW_GATEWAY || '').toLowerCase())) {
+  fastify.register(openClawGatewayPlugin)
+}
 
 const publicEnvs = {}
 for (const key in process.env) {
@@ -160,17 +164,41 @@ fastify.get('/health', async (request, reply) => {
 
 fastify.get('/status', async (request, reply) => {
   try {
+    const agentByPlayerId = new Map()
+    for (const agent of listManagedAgentSessions()) {
+      if (!agent.playerId) continue
+      agentByPlayerId.set(agent.playerId, agent)
+    }
+
     const status = {
       uptime: Math.round(world.time),
       protected: process.env.ADMIN_CODE !== undefined ? true : false,
       connectedUsers: [],
+      agents: [],
       commitHash: process.env.COMMIT_HASH,
     }
+    status.agents = listManagedAgentSessions().map(agent => ({
+      agentId: agent.id,
+      playerId: agent.playerId,
+      name: agent.name,
+      displayName: agent.displayName,
+      status: agent.status,
+      transport: agent.transport,
+      tag: agent.tag,
+      lastActivity: agent.lastActivity,
+    }))
     for (const socket of world.network.sockets.values()) {
+      const playerId = socket.player.data.userId
+      const agent = agentByPlayerId.get(playerId)
       status.connectedUsers.push({
-        id: socket.player.data.userId,
+        id: playerId,
         position: socket.player.position.value.toArray(),
         name: socket.player.data.name,
+        isAgent: !!agent,
+        agentId: agent?.id || null,
+        agentTag: agent?.tag || null,
+        agentTransport: agent?.transport || null,
+        agentStatus: agent?.status || null,
       })
     }
 

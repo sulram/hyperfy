@@ -13,6 +13,7 @@ const MAX_AGENTS = 100
 const agentSessions = new Map()
 const tokenIndex = new Map()
 const proximityState = new Map()
+const agentManagerListeners = new Set()
 
 const round2 = n => Math.round(n * 100) / 100
 
@@ -23,6 +24,14 @@ const round2 = n => Math.round(n * 100) / 100
 function destroySession(agentId) {
   const session = agentSessions.get(agentId)
   if (!session) return
+  emitAgentManagerEvent({
+    type: 'session_destroyed',
+    agentId,
+    transport: session.transport,
+    displayName: session.displayName,
+    name: session.agent?.name,
+    reason: session.destroyReason || null,
+  })
   if (session.token) tokenIndex.delete(session.token)
   if (session.agent) {
     try { session.agent.disconnect() } catch {}
@@ -47,6 +56,26 @@ function destroySession(agentId) {
   console.log(`[agents] Session destroyed: ${agentId}`)
 }
 
+function emitAgentManagerEvent(event) {
+  for (const listener of agentManagerListeners) {
+    try {
+      listener(event)
+    } catch (err) {
+      console.error('[agents] agent manager listener error:', err)
+    }
+  }
+}
+
+export function subscribeAgentManagerEvents(listener) {
+  if (typeof listener !== 'function') {
+    throw new Error('listener must be a function')
+  }
+  agentManagerListeners.add(listener)
+  return () => {
+    agentManagerListeners.delete(listener)
+  }
+}
+
 function resolveDisplayName(name, agentId) {
   for (const [id, session] of agentSessions) {
     if (id !== agentId && session.agent.name === name) {
@@ -61,6 +90,16 @@ function resolveFromName(fromId, fallback) {
     if (session.agent.getPlayerId() === fromId) return session.displayName
   }
   return fallback
+}
+
+function toAgentChatEvent(chatMsg) {
+  return {
+    from: resolveFromName(chatMsg.fromId, chatMsg.from),
+    fromId: chatMsg.fromId,
+    body: chatMsg.body,
+    id: chatMsg.id,
+    createdAt: chatMsg.createdAt,
+  }
 }
 
 function pushEvent(session, event) {
@@ -430,6 +469,135 @@ async function spawnAgent(name, avatarRef) {
   return { id, token, agent, displayName }
 }
 
+function createInternalAgentChatHandler({ id, agent, onChat }) {
+  return chatMsg => {
+    const playerId = agent.getPlayerId()
+    if (chatMsg.fromId === playerId) return
+    const chat = toAgentChatEvent(chatMsg)
+    emitAgentManagerEvent({ type: 'chat', transport: 'internal', agentId: id, ...chat })
+    if (onChat) onChat(chat)
+  }
+}
+
+export async function spawnManagedAgentSession({ name, avatar, tag, onChat, onKick, onDisconnect } = {}) {
+  const spawnResult = await spawnAgent(name, avatar)
+  const { id, token, agent, displayName } = spawnResult
+  agent.onWorldChat = createInternalAgentChatHandler({ id, agent, onChat })
+  agent.onKick = code => {
+    const session = agentSessions.get(id)
+    if (session) session.destroyReason = `kicked:${code}`
+    emitAgentManagerEvent({ type: 'kicked', transport: 'internal', agentId: id, code })
+    if (onKick) onKick(code)
+    queueMicrotask(() => destroySession(id))
+  }
+  agent.onDisconnect = () => {
+    const session = agentSessions.get(id)
+    if (session) session.destroyReason = session.destroyReason || 'disconnected'
+    emitAgentManagerEvent({ type: 'disconnected', transport: 'internal', agentId: id })
+    if (onDisconnect) onDisconnect()
+    queueMicrotask(() => destroySession(id))
+  }
+
+  const session = {
+    agent,
+    transport: 'internal',
+    token,
+    ws: null,
+    eventBuffer: null,
+    lastActivity: Date.now(),
+    displayName,
+    persistent: true,
+    tag: tag || null,
+    destroyReason: null,
+  }
+  agentSessions.set(id, session)
+  tokenIndex.set(token, id)
+  emitAgentManagerEvent({
+    type: 'spawned',
+    transport: 'internal',
+    agentId: id,
+    displayName,
+    name: agent.name,
+    avatar: agent.avatar,
+    tag: session.tag,
+  })
+  console.log(`[agents] Internal spawned: ${agent.name} (${id}) displayName=${displayName}${tag ? ` tag=${tag}` : ''}`)
+  return { id, token, agent, displayName, avatar: agent.avatar }
+}
+
+export function getManagedAgentSession(agentId) {
+  const session = agentSessions.get(agentId)
+  if (!session) return null
+  return {
+    id: session.agent.id,
+    transport: session.transport,
+    status: session.agent.status,
+    name: session.agent.name,
+    displayName: session.displayName,
+    avatar: session.agent.avatar,
+    lastActivity: session.lastActivity,
+    tag: session.tag || null,
+  }
+}
+
+export function listManagedAgentSessions() {
+  const list = []
+  for (const [id, session] of agentSessions) {
+    list.push({
+      id,
+      playerId: typeof session.agent.getPlayerId === 'function' ? session.agent.getPlayerId() : null,
+      transport: session.transport,
+      status: session.agent.status,
+      name: session.agent.name,
+      displayName: session.displayName,
+      avatar: session.agent.avatar,
+      lastActivity: session.lastActivity,
+      tag: session.tag || null,
+    })
+  }
+  return list
+}
+
+function adminCodeAuthorized(req) {
+  const expected = process.env.ADMIN_CODE
+  if (expected == null) return false
+  const header = req.headers['x-admin-code']
+  const bodyCode = req.body && typeof req.body === 'object' ? req.body.adminCode : undefined
+  const queryCode = req.query && typeof req.query === 'object' ? req.query.adminCode : undefined
+  const provided = header || bodyCode || queryCode
+  return typeof provided === 'string' && provided === expected
+}
+
+export function speakManagedAgent(agentId, text) {
+  const session = agentSessions.get(agentId)
+  if (!session) {
+    return { ok: false, code: 'NOT_FOUND', error: 'Agent session not found' }
+  }
+  session.lastActivity = Date.now()
+  if (session.agent.status !== 'connected') {
+    return { ok: false, code: 'NOT_CONNECTED', error: `Agent not connected (${session.agent.status})` }
+  }
+  if (!text || typeof text !== 'string') {
+    return { ok: false, code: 'INVALID_PARAMS', error: 'text is required' }
+  }
+  if (text.length > MAX_CHAT_LENGTH) {
+    return { ok: false, code: 'INVALID_PARAMS', error: `Message too long (max ${MAX_CHAT_LENGTH})` }
+  }
+  const warning = validateSpeakText(text)
+  session.agent.speak(text)
+  const result = { ok: true }
+  if (warning) result.warning = warning
+  return result
+}
+
+export function despawnManagedAgentSession(agentId, reason = 'manual') {
+  const session = agentSessions.get(agentId)
+  if (!session) return false
+  session.destroyReason = reason
+  destroySession(agentId)
+  return true
+}
+
 // ---------------------------------------------------------------------------
 // Fastify Plugin
 // ---------------------------------------------------------------------------
@@ -448,6 +616,7 @@ export async function agentManagerPlugin(fastify, opts) {
   const cleanupInterval = setInterval(() => {
     const now = Date.now()
     for (const [id, session] of agentSessions) {
+      if (session.persistent) continue
       if (now - session.lastActivity > INACTIVITY_TTL) {
         console.log(`[agents] Inactivity timeout: ${id} (${session.agent.name})`)
         if (session.transport === 'ws' && session.ws) {
@@ -513,6 +682,48 @@ export async function agentManagerPlugin(fastify, opts) {
     return { avatars: avatarLibrary }
   })
 
+  // ---- Admin maintenance endpoints (server-side only, protected by ADMIN_CODE) ----
+  fastify.post('/api/agents/admin/despawn', async (req, reply) => {
+    if (!adminCodeAuthorized(req)) return reply.code(401).send({ error: 'UNAUTHORIZED' })
+    const { agentId, reason } = req.body || {}
+    if (!agentId || typeof agentId !== 'string') {
+      return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'agentId is required' })
+    }
+    const ok = despawnManagedAgentSession(agentId, reason || 'admin_despawn')
+    if (!ok) return reply.code(404).send({ error: 'NOT_FOUND' })
+    return { ok: true, status: 'despawned', agentId }
+  })
+
+  fastify.post('/api/agents/admin/prune-duplicates', async (req, reply) => {
+    if (!adminCodeAuthorized(req)) return reply.code(401).send({ error: 'UNAUTHORIZED' })
+    const {
+      name,
+      transport,
+      tag,
+      keep = 1,
+      onlyConnected = true,
+    } = req.body || {}
+    const keepCount = Math.max(0, Number(keep) || 1)
+    const sessions = listManagedAgentSessions()
+      .filter(s => (name ? s.name === name || s.displayName === name : true))
+      .filter(s => (transport ? s.transport === transport : true))
+      .filter(s => (tag !== undefined ? (s.tag || null) === (tag || null) : true))
+      .filter(s => (onlyConnected ? s.status === 'connected' : true))
+      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
+
+    const kept = sessions.slice(0, keepCount).map(s => s.id)
+    const removed = []
+    for (const s of sessions.slice(keepCount)) {
+      if (despawnManagedAgentSession(s.id, 'admin_prune_duplicates')) removed.push(s.id)
+    }
+    return {
+      ok: true,
+      matched: sessions.length,
+      kept,
+      removed,
+    }
+  })
+
   // ---- Spawn (HTTP) ----
   fastify.post('/api/spawn', async (req, reply) => {
     const { name, avatar } = req.body || {}
@@ -529,21 +740,34 @@ export async function agentManagerPlugin(fastify, opts) {
     agent.onWorldChat = chatMsg => {
       const playerId = agent.getPlayerId()
       if (chatMsg.fromId === playerId) return
-      eventBuffer.push({
-        type: 'chat',
-        from: resolveFromName(chatMsg.fromId, chatMsg.from),
-        fromId: chatMsg.fromId,
-        body: chatMsg.body,
-        id: chatMsg.id,
-        createdAt: chatMsg.createdAt,
-      })
+      const chat = toAgentChatEvent(chatMsg)
+      eventBuffer.push({ type: 'chat', ...chat })
+      emitAgentManagerEvent({ type: 'chat', transport: 'http', agentId: id, ...chat })
     }
-    agent.onKick = code => eventBuffer.push({ type: 'kicked', code })
-    agent.onDisconnect = () => eventBuffer.push({ type: 'disconnected' })
+    agent.onKick = code => {
+      const session = agentSessions.get(id)
+      if (session) session.destroyReason = `kicked:${code}`
+      eventBuffer.push({ type: 'kicked', code })
+      emitAgentManagerEvent({ type: 'kicked', transport: 'http', agentId: id, code })
+    }
+    agent.onDisconnect = () => {
+      const session = agentSessions.get(id)
+      if (session) session.destroyReason = session.destroyReason || 'disconnected'
+      eventBuffer.push({ type: 'disconnected' })
+      emitAgentManagerEvent({ type: 'disconnected', transport: 'http', agentId: id })
+    }
 
-    const session = { agent, transport: 'http', token, ws: null, eventBuffer, lastActivity: Date.now(), displayName }
+    const session = { agent, transport: 'http', token, ws: null, eventBuffer, lastActivity: Date.now(), displayName, persistent: false, destroyReason: null }
     agentSessions.set(id, session)
     tokenIndex.set(token, id)
+    emitAgentManagerEvent({
+      type: 'spawned',
+      transport: 'http',
+      agentId: id,
+      displayName,
+      name: agent.name,
+      avatar: agent.avatar,
+    })
 
     console.log(`[agents] HTTP spawned: ${name} (${id}) displayName=${displayName}`)
 
@@ -718,13 +942,35 @@ export async function agentManagerPlugin(fastify, opts) {
           agent.onWorldChat = chatMsg => {
             const playerId = agent.getPlayerId()
             if (chatMsg.fromId === playerId) return
-            sendWs('chat', { from: resolveFromName(chatMsg.fromId, chatMsg.from), fromId: chatMsg.fromId, body: chatMsg.body, id: chatMsg.id, createdAt: chatMsg.createdAt })
+            const chat = toAgentChatEvent(chatMsg)
+            sendWs('chat', chat)
+            emitAgentManagerEvent({ type: 'chat', transport: 'ws', agentId: id, ...chat })
           }
-          agent.onKick = code => { sendWs('kicked', { code }); ws.close() }
-          agent.onDisconnect = () => { sendWs('disconnected'); ws.close() }
+          agent.onKick = code => {
+            const session = agentSessions.get(id)
+            if (session) session.destroyReason = `kicked:${code}`
+            emitAgentManagerEvent({ type: 'kicked', transport: 'ws', agentId: id, code })
+            sendWs('kicked', { code })
+            ws.close()
+          }
+          agent.onDisconnect = () => {
+            const session = agentSessions.get(id)
+            if (session) session.destroyReason = session.destroyReason || 'disconnected'
+            emitAgentManagerEvent({ type: 'disconnected', transport: 'ws', agentId: id })
+            sendWs('disconnected')
+            ws.close()
+          }
 
-          const session = { agent, transport: 'ws', token: null, ws, eventBuffer: null, lastActivity: Date.now(), displayName }
+          const session = { agent, transport: 'ws', token: null, ws, eventBuffer: null, lastActivity: Date.now(), displayName, persistent: false, destroyReason: null }
           agentSessions.set(id, session)
+          emitAgentManagerEvent({
+            type: 'spawned',
+            transport: 'ws',
+            agentId: id,
+            displayName,
+            name: agent.name,
+            avatar: agent.avatar,
+          })
 
           console.log(`[agents] WS spawned: ${name} (${id}) displayName=${displayName}`)
           sendWs('spawned', { id: agent.id, name: agent.name, displayName, avatar: agent.avatar })

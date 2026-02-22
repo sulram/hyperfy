@@ -1,6 +1,86 @@
+---
+name: hyperfy-agent
+description: Controle um avatar 3D no mundo Hyperfy via curl. Spawn, chat, navegacao, polling de eventos e interacao com outros players em tempo real.
+---
+
 # Hyperfy Agent - Guia Operacional
 
+
 Voce e um agente em um mundo 3D. Usa curl para interagir. BASE_URL sera informado no chat.
+
+## REGRA CRITICA: Mantenha-se ativo com um loop de polling
+
+O heartbeat (health check) roda apenas a cada 1-2 minutos. Isso e MUITO tempo parado.
+**Um agente parado por 1-2 min sem fazer nada parece morto.**
+
+Voce DEVE rodar um loop de polling em background assim que fizer spawn.
+O loop mantem a conexao viva, recebe eventos (chats, navegacao) e te permite reagir em tempo real.
+
+### Loop de polling (rode em background logo apos spawn):
+
+```bash
+# Loop de polling — rode isso em background apos spawn
+for i in $(seq 1 200); do
+  RESPONSE=$(curl -s -d "ping" "$SESSION")
+
+  # Checar se tem mensagens de chat nos eventos
+  CHATS=$(echo "$RESPONSE" | jq -r '.events[]? | select(.type=="chat") | "\(.from): \(.body)"')
+  if [ -n "$CHATS" ]; then
+    echo "CHAT RECEBIDO: $CHATS"
+    # Extrair nome de quem falou para se aproximar
+    FROM=$(echo "$RESPONSE" | jq -r '.events[]? | select(.type=="chat") | .from' | head -1)
+    # Responder e correr ate a pessoa
+    curl -s -d "say Oi $FROM!
+goto @$FROM run" "$SESSION"
+  fi
+
+  sleep 3
+done
+```
+
+### Exemplo: explorar enquanto ninguem fala
+
+```bash
+# A cada 10 polls (~30s) sem chat, ande para um lugar aleatorio
+IDLE=0
+for i in $(seq 1 200); do
+  RESPONSE=$(curl -s -d "ping" "$SESSION")
+  HAS_CHAT=$(echo "$RESPONSE" | jq '.events[]? | select(.type=="chat")' | head -1)
+
+  if [ -n "$HAS_CHAT" ]; then
+    IDLE=0
+    FROM=$(echo "$RESPONSE" | jq -r '.events[]? | select(.type=="chat") | .from' | head -1)
+    curl -s -d "say Oi $FROM! To chegando!
+goto @$FROM run" "$SESSION"
+  else
+    IDLE=$((IDLE + 1))
+    if [ $IDLE -ge 10 ]; then
+      # Ninguem falou por ~30s, explorar o mundo
+      curl -s -d "move forward 3000" "$SESSION"
+      IDLE=0
+    fi
+  fi
+
+  sleep 3
+done
+```
+
+### Exemplo: se aproximar de quem esta conversando
+
+```bash
+# Ver quem esta no mundo e ir ate alguem
+AGENTS=$(curl -s -d "who" "$SESSION" | jq -r '.agents[]?.displayName' | head -1)
+if [ -n "$AGENTS" ]; then
+  curl -s -d "goto @$AGENTS run" "$SESSION"
+  # Esperar chegar e puxar conversa
+  sleep 5
+  curl -s -d "say E ai, tudo bem?" "$SESSION"
+fi
+```
+
+**Resumo:** apos spawn, rode o loop de polling em background. Ele faz ping a cada 3s, reage a chats, e explora o mundo. Nunca espere 1-2 min sem fazer nada.
+
+---
 
 ## Spawn
 

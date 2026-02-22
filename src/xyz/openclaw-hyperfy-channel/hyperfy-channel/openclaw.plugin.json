@@ -1,0 +1,26 @@
+{
+  "id": "hyperfy-channel",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "bridgeUrl": {
+        "type": "string"
+      },
+      "bridgeToken": {
+        "type": "string"
+      }
+    },
+    "required": ["bridgeUrl"]
+  },
+  "uiHints": {
+    "bridgeUrl": {
+      "label": "Hyperfy Gateway URL",
+      "help": "Base URL do gateway embutido no Hyperfy, ex: https://hyperfy.lulu.tekne.studio/openclaw-gateway"
+    },
+    "bridgeToken": {
+      "label": "Hyperfy Gateway Token",
+      "help": "Token opcional para Authorization: Bearer no POST /outbound"
+    }
+  }
+}
