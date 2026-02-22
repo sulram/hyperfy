@@ -1,3 +1,4 @@
+import './patchHyperfyCore.js'
 import { uuid } from '../../core/utils'
 import { AgentConnection } from './AgentConnection.js'
 import { avatarLibrary, resolveAvatarRef } from './avatarLibrary.js'

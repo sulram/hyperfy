@@ -1,7 +1,7 @@
 const ASSETS_BASE_URL = process.env.PUBLIC_ASSETS_URL || 'http://localhost:3000/assets'
 
 export const avatarLibrary = [
-  { id: 'default', name: 'Default Avatar', url: `${ASSETS_BASE_URL}/avatar.vrm` },
+  { id: 'default', name: 'Default Avatar', url: null },
   { id: 'aesthetica', name: 'Aesthetica', url: `${ASSETS_BASE_URL}/Aesthetica_VRM.vrm` },
   { id: 'alwayswatching', name: 'AlwaysWatching', url: `${ASSETS_BASE_URL}/AlwaysWatching_VRM.vrm` },
   { id: 'amazonas', name: 'Amazonas', url: `${ASSETS_BASE_URL}/Amazonas_VRM.vrm` },

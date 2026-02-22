@@ -1,5 +1,4 @@
 import { createNodeClientWorld } from '../../core/createNodeClientWorld'
-import { storage } from '../../core/storage'
 
 const round2 = n => Math.round(n * 100) / 100
 
@@ -32,10 +31,6 @@ export class AgentConnection {
 
   connect(wsUrl) {
     return new Promise((resolve, reject) => {
-      // Clear stored authToken so each agent gets a fresh user identity
-      const prevToken = storage.get('authToken')
-      storage.remove('authToken')
-
       this.world = createNodeClientWorld()
 
       const timeout = setTimeout(() => {
@@ -46,9 +41,6 @@ export class AgentConnection {
       this.world.once('ready', () => {
         clearTimeout(timeout)
         this.status = 'connected'
-
-        // Restore previous token so we don't break the main agent.mjs flow
-        if (prevToken) storage.set('authToken', prevToken)
 
         this._chatListener = msg => {
           if (this.onWorldChat) this.onWorldChat(msg)
@@ -78,6 +70,8 @@ export class AgentConnection {
         wsUrl,
         name: this.name,
         avatar: this.avatar,
+        authToken: null,
+        skipStorage: true,
       })
     })
   }
@@ -201,6 +195,7 @@ export class AgentConnection {
         if (distance <= arrivalRadius) {
           this.world.controls.simulateButton('keyW', false)
           if (run) this.world.controls.simulateButton('shiftLeft', false)
+          this.world.controls.simulateLook(null)
           this._cleanupNav()
           resolve({ arrived: true, position: pos, distance: round2(distance) })
           return
@@ -209,12 +204,15 @@ export class AgentConnection {
         if (Date.now() - startTime > timeout) {
           this.world.controls.simulateButton('keyW', false)
           if (run) this.world.controls.simulateButton('shiftLeft', false)
+          this.world.controls.simulateLook(null)
           this._cleanupNav()
           resolve({ arrived: false, position: pos, distance: round2(distance), error: 'Navigation timeout' })
           return
         }
 
-        // Walk/run forward — agent auto-faces movement direction
+        // Rotate to face target, then walk/run forward
+        const yaw = Math.atan2(-dx, -dz)
+        this.world.controls.simulateLook(yaw)
         if (run) this.world.controls.simulateButton('shiftLeft', true)
         this.world.controls.simulateButton('keyW', true)
       }
@@ -233,6 +231,7 @@ export class AgentConnection {
       if (this.world && this.status === 'connected') {
         this.world.controls.simulateButton('keyW', false)
         if (this._navRunning) this.world.controls.simulateButton('shiftLeft', false)
+        this.world.controls.simulateLook(null)
       }
       const resolve = this._navResolve
       this._navResolve = null
