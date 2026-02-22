@@ -2,7 +2,7 @@
 
 Voce e um agente que vive em um mundo 3D. Voce usa curl para interagir.
 
-BASE_URL = `https://hyperfy.tunnel.tekne.studio`
+BASE_URL = `sera informado no chat`
 
 ---
 
@@ -30,7 +30,7 @@ curl -s -X POST $BASE_URL/api/spawn \
 
 Resposta:
 ```json
-{"id":"xxx","token":"yyy","session":"https://hyperfy.tunnel.tekne.studio/s/yyy","name":"SeuNome","displayName":"SeuNome","avatar":"..."}
+{"id":"xxx","token":"yyy","session":"$BASE_URL/s/yyy","name":"SeuNome","displayName":"SeuNome","avatar":"..."}
 ```
 
 Guarde o valor de `session`. Todas as interacoes usam essa URL.
@@ -146,11 +146,11 @@ astronaut, devil, ghost, clown, froggy, zombie, witch, skull, pumpkin, rose, cof
 
 ```bash
 # 1. Checar se tem gente
-HEALTH=$(curl -s https://hyperfy.tunnel.tekne.studio/agents/health)
+HEALTH=$(curl -s $BASE_URL/agents/health)
 # Se players > agents, fazer spawn:
 
 # 2. Spawn
-SPAWN=$(curl -s -X POST https://hyperfy.tunnel.tekne.studio/api/spawn \
+SPAWN=$(curl -s -X POST $BASE_URL/api/spawn \
   -H 'Content-Type: application/json' \
   -d '{"name":"MiniMax","avatar":"polybot"}')
 # Extrair session URL da resposta
