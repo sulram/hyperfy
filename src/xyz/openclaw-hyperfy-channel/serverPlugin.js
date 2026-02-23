@@ -1911,6 +1911,147 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
   fastify.post(`${config.routePrefix}/action`, async (req, reply) => {
     if (!requireOutboundAuth(req, reply)) return
 
+    const normalizeActionType = actionType => {
+      const t = String(actionType || '').trim()
+      const map = {
+        catalog: 'build.catalog',
+        snapshot: 'build.snapshot',
+        perception: 'build.perception',
+        'carry.status': 'build.carry.status',
+        'carry.start': 'build.carry.start',
+        'carry.stop': 'build.carry.stop',
+        'reposition-auto': 'build.reposition-auto',
+        reposition_auto: 'build.reposition-auto',
+        move: 'build.move',
+        place: 'build.place',
+        remove: 'build.remove',
+        'remove-all': 'build.remove-all',
+        remove_all: 'build.remove-all',
+        clear: 'build.remove-all',
+        'clear-all': 'build.remove-all',
+        clear_all: 'build.remove-all',
+        'clear-all-cubes': 'build.remove-all',
+      }
+      return map[t] || t
+    }
+
+    const buildActionExamples = canonicalType => {
+      const examples = {
+        'build.perception': [{ type: 'build.perception' }],
+        'build.place': [{ type: 'build.place', input: { targetGrid: { x: 1, y: 0, z: 0 } } }],
+        'build.reposition-auto': [{ type: 'build.reposition-auto', input: { targetGrid: { x: 2, y: 0, z: 0 } } }],
+        'build.remove': [{ type: 'build.remove', input: { targetGrid: { x: 1, y: 0, z: 0 } } }],
+        'build.remove-all': [{ type: 'build.clear' }],
+        'build.move': [{ type: 'build.move', input: { sourceGrid: { x: 1, y: 0, z: 0 }, targetGrid: { x: 2, y: 0, z: 0 } } }],
+        'build.carry.start': [{ type: 'build.carry.start' }, { type: 'build.carry.start', input: { sourceGrid: { x: 1, y: 0, z: 0 } } }],
+        'build.carry.stop': [{ type: 'build.carry.stop' }, { type: 'build.carry.stop', input: { targetGrid: { x: 2, y: 0, z: 0 } } }],
+      }
+      return examples[canonicalType] || []
+    }
+
+    const buildActionHelp = ({ requestedType, canonicalType, input, errorCode, errorMessage, statusCode }) => {
+      const isBuild = canonicalType.startsWith('build.')
+      if (!isBuild) return null
+
+      const help = {
+        requestedType,
+        canonicalType,
+        canonicalParams: {
+          targetGrid: 'destination voxel {x,y,z}',
+          sourceGrid: 'origin voxel {x,y,z}',
+        },
+        reminders: [
+          'Use build.perception first to inspect voxels, limits, and players[].',
+          'Prefer targetGrid/sourceGrid as parameter names.',
+        ],
+        examples: buildActionExamples(canonicalType),
+      }
+
+      if (requestedType !== canonicalType) {
+        help.normalization = `Alias accepted. Prefer '${canonicalType}' in future calls.`
+      }
+
+      if (!errorCode) return help
+
+      help.error = {
+        code: errorCode,
+        message: errorMessage || null,
+        statusCode,
+      }
+
+      if (errorCode === 'INVALID_PARAMS') {
+        const byAction = {
+          'build.place': {
+            explanation: 'build.place creates a new cube and needs a destination voxel.',
+            required: ['targetGrid'],
+            nextActions: ['build.perception', 'build.place'],
+          },
+          'build.reposition-auto': {
+            explanation: 'build.reposition-auto moves an existing cube automatically and needs a destination voxel.',
+            required: ['targetGrid'],
+            nextActions: ['build.perception', 'build.reposition-auto'],
+          },
+          'build.remove': {
+            explanation: 'build.remove deletes one cube. Pass targetGrid (or sourceGrid/grid/voxel) or entityId.',
+            required: ['targetGrid or entityId'],
+            nextActions: ['build.perception', 'build.remove'],
+          },
+          'build.move': {
+            explanation: 'build.move moves a specific cube from source to destination.',
+            required: ['sourceGrid (or entityId)', 'targetGrid'],
+            nextActions: ['build.perception', 'build.move'],
+          },
+          'build.carry.start': {
+            explanation: 'build.carry.start does not create cubes. It grabs an existing cube, or nearest cube if none is specified.',
+            required: ['optional sourceGrid or entityId'],
+            nextActions: ['build.perception', 'build.place (if no cubes exist)', 'build.carry.start'],
+          },
+        }
+        help.hint = byAction[canonicalType] || {
+          explanation: 'Check the canonical parameters and examples below.',
+          nextActions: ['build.perception'],
+        }
+      } else if (errorCode === 'MAX_CUBES_REACHED') {
+        help.hint = {
+          explanation: 'The cube cap was reached. You cannot create more cubes until you remove or move existing cubes.',
+          nextActions: ['build.reposition-auto', 'build.remove', 'build.clear', 'build.perception'],
+        }
+      } else if (errorCode === 'VOXEL_OCCUPIED') {
+        help.hint = {
+          explanation: 'The target voxel already has a cube.',
+          nextActions: ['build.perception', 'choose another targetGrid', canonicalType],
+        }
+      } else if (errorCode === 'MAX_STACK_HEIGHT_REACHED') {
+        help.hint = {
+          explanation: 'This column reached the stack height limit.',
+          nextActions: ['build.perception', 'choose another column/targetGrid'],
+        }
+      } else if (errorCode === 'NOT_FOUND') {
+        help.hint = {
+          explanation:
+            canonicalType === 'build.carry.start'
+              ? 'No cube was found to carry. carry.start only grabs existing cubes; it does not create cubes.'
+              : 'The requested cube/voxel was not found.',
+          nextActions:
+            canonicalType === 'build.carry.start'
+              ? ['build.perception', 'build.place', 'build.carry.start']
+              : ['build.perception'],
+        }
+      } else if (errorCode === 'PICKUP_NAVIGATION_FAILED' || errorCode === 'NAVIGATION_FAILED') {
+        help.hint = {
+          explanation: 'The bot could not reach the source or target location.',
+          nextActions: ['build.perception', 'choose a closer targetGrid', 'retry build.reposition-auto'],
+        }
+      } else if (errorCode === 'CARRY_ACTIVE') {
+        help.hint = {
+          explanation: 'That cube is currently being carried.',
+          nextActions: ['build.carry.stop', 'build.carry.status'],
+        }
+      }
+
+      return help
+    }
+
     const body = req.body || {}
     const action =
       (body.action && typeof body.action === 'object' && !Array.isArray(body.action) && body.action) ||
@@ -1965,10 +2106,22 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
 
     const target = routeMap[type]
     if (!target) {
+      const canonicalType = normalizeActionType(type)
       return reply.code(400).send({
         error: 'UNSUPPORTED_ACTION',
         message: `Unsupported action type: ${type}`,
         supported: Object.keys(routeMap),
+        help: {
+          requestedType: type,
+          canonicalType,
+          explanation: 'Use a supported action name. Prefer build.* names for stability.',
+          examples: [
+            { type: 'build.perception' },
+            { type: 'build.place', input: { targetGrid: { x: 1, y: 0, z: 0 } } },
+            { type: 'build.reposition-auto', input: { targetGrid: { x: 2, y: 0, z: 0 } } },
+            { type: 'build.clear' },
+          ],
+        },
       })
     }
 
@@ -1990,12 +2143,30 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
       data = { raw: injected.body }
     }
 
-    return reply.code(injected.statusCode).send({
+    const canonicalType = normalizeActionType(type)
+    const resultErrorCode = data && typeof data === 'object' ? data.error || null : null
+    const resultErrorMessage = data && typeof data === 'object' ? data.message || null : null
+    const help =
+      injected.statusCode >= 400
+        ? buildActionHelp({
+            requestedType: type,
+            canonicalType,
+            input,
+            errorCode: resultErrorCode,
+            errorMessage: resultErrorMessage,
+            statusCode: injected.statusCode,
+          })
+        : null
+
+    const response = {
       ok: injected.statusCode >= 200 && injected.statusCode < 300,
       action: type,
+      canonicalAction: canonicalType,
       result: data,
       statusCode: injected.statusCode,
-    })
+    }
+    if (help) response.help = help
+    return reply.code(injected.statusCode).send(response)
   })
 
   fastify.post(`${config.routePrefix}/outbound`, async (req, reply) => {
