@@ -1802,12 +1802,16 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
         return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'Only assetClassId=default-cube is supported for now' })
       }
 
-      const g = body.grid && typeof body.grid === 'object' ? body.grid : null
-      const grid = g
+      const gridInput =
+        (body.grid && typeof body.grid === 'object' && body.grid) ||
+        (body.targetGrid && typeof body.targetGrid === 'object' && body.targetGrid) ||
+        (body.voxel && typeof body.voxel === 'object' && body.voxel) ||
+        null
+      const grid = gridInput
         ? {
-            x: Number.parseInt(g.x, 10),
-            y: Number.parseInt(g.y, 10),
-            z: Number.parseInt(g.z, 10),
+            x: Number.parseInt(gridInput.x, 10),
+            y: Number.parseInt(gridInput.y, 10),
+            z: Number.parseInt(gridInput.z, 10),
           }
         : null
       if (!grid || ![grid.x, grid.y, grid.z].every(Number.isInteger)) {
