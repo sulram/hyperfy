@@ -108,6 +108,15 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+function formatPosForContext(pos) {
+  if (!pos || typeof pos !== 'object') return null
+  const x = Number(pos.x)
+  const y = Number(pos.y)
+  const z = Number(pos.z)
+  if (![x, y, z].every(Number.isFinite)) return null
+  return `x=${round3(x)}, y=${round3(y)}, z=${round3(z)}`
+}
+
 function encodeTargetPart(value) {
   return encodeURIComponent(String(value || '').trim())
 }
@@ -265,7 +274,7 @@ function createLogger(config) {
   }
 }
 
-async function sendToOpenClaw(config, logger, { from, fromId, body, id, createdAt }) {
+async function sendToOpenClaw(config, logger, { from, fromId, body, id, createdAt, speakerPosition, gatewayAgentPosition, speakerDistance }) {
   const dynamicTarget =
     config.openclaw.dynamicPlayerTarget && config.openclaw.channelId === 'hyperfy-channel'
       ? buildHyperfyPlayerTarget({ from, fromId })
@@ -275,8 +284,18 @@ async function sendToOpenClaw(config, logger, { from, fromId, body, id, createdA
     config.openclaw.hookSessionKeyMode === 'none'
       ? undefined
       : buildHyperfyHookSessionKey({ from, fromId })
+  const contextParts = []
+  const speakerPosText = formatPosForContext(speakerPosition)
+  const gatewayPosText = formatPosForContext(gatewayAgentPosition)
+  if (speakerPosText) contextParts.push(`speaker_position(${speakerPosText})`)
+  if (gatewayPosText) contextParts.push(`gateway_bot_position(${gatewayPosText})`)
+  if (Number.isFinite(speakerDistance)) contextParts.push(`speaker_distance=${round3(speakerDistance)}`)
+  const inboundMessage =
+    contextParts.length && typeof body === 'string'
+      ? `[HyperfyContext ${contextParts.join('; ')}]\n${body}`
+      : body
   const payload = {
-    message: body,
+    message: inboundMessage,
     name: from || 'Hyperfy',
     agentId: config.openclaw.agent,
     channel: config.openclaw.channelId,
@@ -292,11 +311,17 @@ async function sendToOpenClaw(config, logger, { from, fromId, body, id, createdA
         speaker: {
           id: fromId || null,
           name: from || null,
+          position: speakerPosition || null,
+          distanceToGatewayAgent: Number.isFinite(speakerDistance) ? round3(speakerDistance) : null,
+        },
+        gatewayAgent: {
+          position: gatewayAgentPosition || null,
         },
         message: {
           id: id || null,
           createdAt: createdAt || null,
           bodyPreview: typeof body === 'string' ? body.slice(0, 200) : null,
+          enrichedWithContext: contextParts.length > 0,
         },
       },
     },
@@ -855,6 +880,28 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
     dedupe.add(key)
     try {
       markInteraction('inbound_chat')
+      let speakerPosition = null
+      let gatewayAgentPosition = null
+      let speakerDistance = null
+      if (state.agentId) {
+        const runtime = getManagedAgentRuntime(state.agentId)
+        if (runtime?.agent?.status === 'connected') {
+          gatewayAgentPosition = runtime.agent.getPosition?.() || null
+          const speaker = findVisiblePlayer(runtime, {
+            playerId: event.fromId,
+            playerName: event.from,
+          })
+          if (speaker?.position) {
+            speakerPosition = speaker.position
+            if (gatewayAgentPosition) {
+              const dx = speaker.position.x - gatewayAgentPosition.x
+              const dy = speaker.position.y - gatewayAgentPosition.y
+              const dz = speaker.position.z - gatewayAgentPosition.z
+              speakerDistance = Math.sqrt(dx * dx + dy * dy + dz * dz)
+            }
+          }
+        }
+      }
       if (config.openclaw.approachSpeaker) {
         navigateAgentTowardPlayer({
           playerId: event.fromId,
@@ -862,7 +909,12 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
           source: 'inbound_chat',
         })
       }
-      await sendToOpenClaw(config, logger, event)
+      await sendToOpenClaw(config, logger, {
+        ...event,
+        speakerPosition,
+        gatewayAgentPosition,
+        speakerDistance,
+      })
       state.lastForwardAt = new Date().toISOString()
     } catch (err) {
       state.lastError = err.message
