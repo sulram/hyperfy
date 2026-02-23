@@ -77,6 +77,19 @@ function extractTextFromPayload(payload) {
   return ''
 }
 
+function extractHyperfyActionFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  if (payload.hyperfyAction && typeof payload.hyperfyAction === 'object') return payload.hyperfyAction
+  if (payload.channelData && typeof payload.channelData === 'object') {
+    const action = payload.channelData.hyperfyAction
+    if (action && typeof action === 'object') return action
+  }
+  if (payload.action && typeof payload.action === 'object' && typeof payload.action.type === 'string') {
+    return payload.action
+  }
+  return null
+}
+
 function createHyperfyChannelPlugin(api) {
   const { bridgeUrl, bridgeToken } = resolveBridgeSettings(api)
 
@@ -104,6 +117,37 @@ function createHyperfyChannelPlugin(api) {
       threadId: ctx?.threadId ?? null,
       payloadKeys: ctx?.payload && typeof ctx.payload === 'object' ? Object.keys(ctx.payload) : null,
     })
+    const hyperfyAction =
+      (ctx?.hyperfyAction && typeof ctx.hyperfyAction === 'object' && ctx.hyperfyAction) ||
+      extractHyperfyActionFromPayload(ctx?.payload)
+
+    if (hyperfyAction && typeof hyperfyAction.type === 'string' && hyperfyAction.type.trim()) {
+      console.log('[hyperfy-channel] outbound action posting', {
+        type: hyperfyAction.type,
+        to: ctx?.to ?? null,
+      })
+      const actionResponse = await postJson(`${bridgeUrl}/action`, bridgeToken, {
+        action: hyperfyAction,
+        metadata: {
+          source: 'openclaw',
+          channel: CHANNEL_ID,
+          to: ctx?.to ?? null,
+          accountId: ctx?.accountId ?? null,
+          replyToId: ctx?.replyToId ?? null,
+          threadId: ctx?.threadId ?? null,
+        },
+      })
+      return {
+        channel: CHANNEL_ID,
+        messageId: `hyperfy-action-${Date.now()}`,
+        meta: {
+          bridgeUrl,
+          actionType: hyperfyAction.type,
+          actionResponse,
+        },
+      }
+    }
+
     const text = typeof ctx?.text === 'string' && ctx.text.trim()
       ? ctx.text
       : extractTextFromPayload(ctx?.payload)

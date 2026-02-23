@@ -96,7 +96,7 @@ fastify.register(ws)
 fastify.register(worldNetwork)
 fastify.register(agentManagerPlugin, { world })
 if (['1', 'true', 'yes', 'on'].includes(String(process.env.ENABLE_OPENCLAW_GATEWAY || '').toLowerCase())) {
-  fastify.register(openClawGatewayPlugin)
+  fastify.register(openClawGatewayPlugin, { world })
 }
 
 const publicEnvs = {}
