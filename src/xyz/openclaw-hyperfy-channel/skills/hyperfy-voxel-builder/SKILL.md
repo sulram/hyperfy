@@ -21,6 +21,7 @@ Treat the world as a voxel grid of cubes.
 - Read perception first, choose a target voxel, then ask the gateway to execute.
 - Prefer `/action` with `build.*` commands.
 - Use `result.players[]` from `build.perception` to locate named players (name + world position + voxel grid).
+- Canonical parameter names: `targetGrid` (destination), `sourceGrid` (origin).
 
 ## Main loop
 
@@ -62,7 +63,7 @@ Treat the world as a voxel grid of cubes.
   "action": {
     "type": "build.place",
     "input": {
-      "grid": { "x": 3, "y": 0, "z": 2 }
+      "targetGrid": { "x": 3, "y": 0, "z": 2 }
     }
   }
 }
@@ -109,6 +110,8 @@ Treat the world as a voxel grid of cubes.
 - Target voxel must be free
 - Stack height per column is limited
 - `build.remove` accepts voxel coordinates (`grid`, `targetGrid`, `sourceGrid`, or `voxel`) or `entityId`
+- `build.place` also accepts `grid`/`voxel`, but prefer `targetGrid`
+- `build.move` prefers `{ sourceGrid, targetGrid }`
 
 ## Error handling (required)
 
@@ -136,7 +139,7 @@ or:
   "hyperfyAction": {
     "type": "build.place",
     "input": {
-      "grid": { "x": 3, "y": 0, "z": 2 }
+      "targetGrid": { "x": 3, "y": 0, "z": 2 }
     }
   }
 }
@@ -168,3 +171,4 @@ or:
 - Base URL: `https://hyperfy.lulu.tekne.studio/openclaw-gateway`
 - Action endpoint: `POST /action`
 - Auth header (if enabled): `Authorization: Bearer <token>`
+- Aliases without `build.` exist for compatibility (`place`, `remove`, `clear`, `perception`, `carry.*`), but prefer `build.*`

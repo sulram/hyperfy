@@ -1317,11 +1317,21 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
       let cube = null
       if (typeof body.entityId === 'string' && body.entityId.trim()) {
         cube = snapshot.cubes.find(c => c.entityId === body.entityId) || null
-      } else if (body.grid && typeof body.grid === 'object') {
+      } else if (
+        (body.grid && typeof body.grid === 'object') ||
+        (body.sourceGrid && typeof body.sourceGrid === 'object') ||
+        (body.targetGrid && typeof body.targetGrid === 'object') ||
+        (body.voxel && typeof body.voxel === 'object')
+      ) {
+        const sourceInput =
+          (body.sourceGrid && typeof body.sourceGrid === 'object' && body.sourceGrid) ||
+          (body.grid && typeof body.grid === 'object' && body.grid) ||
+          (body.targetGrid && typeof body.targetGrid === 'object' && body.targetGrid) ||
+          (body.voxel && typeof body.voxel === 'object' && body.voxel)
         const grid = {
-          x: Number.parseInt(body.grid.x, 10),
-          y: Number.parseInt(body.grid.y, 10),
-          z: Number.parseInt(body.grid.z, 10),
+          x: Number.parseInt(sourceInput.x, 10),
+          y: Number.parseInt(sourceInput.y, 10),
+          z: Number.parseInt(sourceInput.z, 10),
         }
         if (![grid.x, grid.y, grid.z].every(Number.isInteger)) {
           return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'grid requires integer x,y,z' })
@@ -1708,11 +1718,21 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
       let cube = null
       if (typeof body.entityId === 'string' && body.entityId.trim()) {
         cube = snapshot.cubes.find(c => c.entityId === body.entityId) || null
-      } else if (body.fromGrid && typeof body.fromGrid === 'object') {
+      } else if (
+        (body.fromGrid && typeof body.fromGrid === 'object') ||
+        (body.sourceGrid && typeof body.sourceGrid === 'object') ||
+        (body.grid && typeof body.grid === 'object') ||
+        (body.voxel && typeof body.voxel === 'object')
+      ) {
+        const sourceInput =
+          (body.sourceGrid && typeof body.sourceGrid === 'object' && body.sourceGrid) ||
+          (body.fromGrid && typeof body.fromGrid === 'object' && body.fromGrid) ||
+          (body.grid && typeof body.grid === 'object' && body.grid) ||
+          (body.voxel && typeof body.voxel === 'object' && body.voxel)
         const fromGrid = {
-          x: Number.parseInt(body.fromGrid.x, 10),
-          y: Number.parseInt(body.fromGrid.y, 10),
-          z: Number.parseInt(body.fromGrid.z, 10),
+          x: Number.parseInt(sourceInput.x, 10),
+          y: Number.parseInt(sourceInput.y, 10),
+          z: Number.parseInt(sourceInput.z, 10),
         }
         if (![fromGrid.x, fromGrid.y, fromGrid.z].every(Number.isInteger)) {
           return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'fromGrid requires integer x,y,z' })
@@ -1732,12 +1752,16 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
         return reply.code(409).send({ error: 'PINNED', message: 'Pinned cubes are protected' })
       }
 
-      const to = body.toGrid && typeof body.toGrid === 'object' ? body.toGrid : null
+      const to =
+        (body.targetGrid && typeof body.targetGrid === 'object' && body.targetGrid) ||
+        (body.toGrid && typeof body.toGrid === 'object' && body.toGrid) ||
+        (body.gridTo && typeof body.gridTo === 'object' && body.gridTo) ||
+        null
       const toGrid = to
         ? { x: Number.parseInt(to.x, 10), y: Number.parseInt(to.y, 10), z: Number.parseInt(to.z, 10) }
         : null
       if (!toGrid || ![toGrid.x, toGrid.y, toGrid.z].every(Number.isInteger)) {
-        return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'toGrid with integer x,y,z is required' })
+        return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'targetGrid/toGrid with integer x,y,z is required' })
       }
 
       const sameCell = cube.grid.x === toGrid.x && cube.grid.y === toGrid.y && cube.grid.z === toGrid.z
@@ -1921,6 +1945,22 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
       'build.clear-all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
       'build.clear_all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
       'build.clear-all-cubes': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'catalog': { method: 'GET', path: `${config.routePrefix}/build/catalog` },
+      'snapshot': { method: 'GET', path: `${config.routePrefix}/build/snapshot` },
+      'perception': { method: 'GET', path: `${config.routePrefix}/build/perception` },
+      'carry.status': { method: 'GET', path: `${config.routePrefix}/build/carry/status` },
+      'carry.start': { method: 'POST', path: `${config.routePrefix}/build/carry/start` },
+      'carry.stop': { method: 'POST', path: `${config.routePrefix}/build/carry/stop` },
+      'reposition-auto': { method: 'POST', path: `${config.routePrefix}/build/reposition-auto` },
+      'reposition_auto': { method: 'POST', path: `${config.routePrefix}/build/reposition-auto` },
+      'move': { method: 'POST', path: `${config.routePrefix}/build/move` },
+      'place': { method: 'POST', path: `${config.routePrefix}/build/place` },
+      'remove': { method: 'POST', path: `${config.routePrefix}/build/remove` },
+      'remove-all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'remove_all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'clear': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'clear-all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'clear_all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
     }
 
     const target = routeMap[type]
