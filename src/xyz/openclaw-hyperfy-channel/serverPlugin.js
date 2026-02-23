@@ -1160,6 +1160,44 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
     }
   }
 
+  const collectPlayersForPerception = () => {
+    if (!world?.entities?.players) return []
+    const managedByPlayerId = new Map()
+    for (const s of listManagedAgentSessions()) {
+      if (!s?.playerId) continue
+      managedByPlayerId.set(s.playerId, s)
+    }
+
+    const players = []
+    for (const [playerId, playerEntity] of world.entities.players) {
+      const data = playerEntity?.data || {}
+      const posArr = Array.isArray(data.position) ? data.position : [0, 0, 0]
+      const position = {
+        x: round3(Number(posArr[0]) || 0),
+        y: round3(Number(posArr[1]) || 0),
+        z: round3(Number(posArr[2]) || 0),
+      }
+      const managed = managedByPlayerId.get(playerId) || null
+      const name = managed?.displayName || data.name || managed?.name || `Player:${playerId.slice?.(0, 6) || playerId}`
+      players.push({
+        id: playerId,
+        name,
+        position,
+        grid: worldToGrid(position, config),
+        isManagedAgent: !!managed,
+        isGatewayAgent: !!managed && !!state.agentId && managed.id === state.agentId,
+      })
+    }
+
+    players.sort((a, b) => {
+      const aGateway = a.isGatewayAgent ? 1 : 0
+      const bGateway = b.isGatewayAgent ? 1 : 0
+      if (aGateway !== bGateway) return bGateway - aGateway
+      return String(a.name || '').localeCompare(String(b.name || ''))
+    })
+    return players
+  }
+
   fastify.get(`${config.routePrefix}/health`, async () => {
     const agent = state.agentId ? getManagedAgentSession(state.agentId) : null
     const buildSnapshot = config.build.enabled && world ? collectBuildSnapshot(world, config) : null
@@ -1233,6 +1271,7 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
     if (!requireOutboundAuth(req, reply)) return
     if (!requireBuildWorld(reply)) return
     const snapshot = collectBuildSnapshot(world, config)
+    const players = collectPlayersForPerception()
     return {
       ok: true,
       grid: {
@@ -1251,6 +1290,7 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
         z: cube.grid.z,
         assetClassId: cube.assetClassId,
       })),
+      players,
       carrying: !!state.carry,
     }
   })
