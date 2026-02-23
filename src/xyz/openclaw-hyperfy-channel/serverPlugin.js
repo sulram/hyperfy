@@ -1325,6 +1325,7 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
         ? Math.min(Math.max(Math.round(body.timeoutMs), 1000), 60000)
         : 20000
     const navRun = body.run === true
+    const approachSource = body.approachSource !== false
 
     state.autoRepositionInFlight = true
     markInteraction('build_reposition_auto')
@@ -1396,6 +1397,36 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
         }
       }
 
+      const pose = getGatewayAgentPose()
+      if (!pose?.runtime?.agent) {
+        return reply.code(409).send({
+          error: 'AGENT_NOT_READY',
+          message: 'Gateway agent pose unavailable',
+          carrying: !!state.carry,
+          carry: getCarryStatus(),
+        })
+      }
+
+      let pickupNavigate = null
+      if (approachSource) {
+        pickupNavigate = await pose.runtime.agent.navigateTo(selectedCube.position.x, selectedCube.position.z, {
+          arrivalRadius: navArrivalRadius,
+          timeout: navTimeout,
+          run: navRun,
+        })
+        if (!pickupNavigate?.arrived) {
+          return reply.code(409).send({
+            error: 'PICKUP_NAVIGATION_FAILED',
+            message: pickupNavigate?.error || 'Failed to approach source cube',
+            sourceGrid: selectedCube.grid,
+            sourceWorld: selectedCube.position,
+            navigate: pickupNavigate,
+            carrying: !!state.carry,
+            carry: getCarryStatus(),
+          })
+        }
+      }
+
       const startCarry = startCarryInternal({
         cube: selectedCube,
         offset: body.carryOffset && typeof body.carryOffset === 'object' ? body.carryOffset : undefined,
@@ -1405,8 +1436,8 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
         return reply.code(status).send(startCarry)
       }
 
-      const pose = getGatewayAgentPose()
-      if (!pose?.runtime?.agent) {
+      const poseAfterPickup = getGatewayAgentPose()
+      if (!poseAfterPickup?.runtime?.agent) {
         return reply.code(409).send({
           error: 'AGENT_NOT_READY',
           message: 'Gateway agent pose unavailable after starting carry',
@@ -1416,7 +1447,7 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
       }
 
       const targetWorld = gridToWorldPosition(targetGrid, config)
-      const navigate = await pose.runtime.agent.navigateTo(targetWorld.x, targetWorld.z, {
+      const navigate = await poseAfterPickup.runtime.agent.navigateTo(targetWorld.x, targetWorld.z, {
         arrivalRadius: navArrivalRadius,
         timeout: navTimeout,
         run: navRun,
@@ -1455,6 +1486,7 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
           assetClassId: selectedCube.assetClassId,
           fromGrid: selectedCube.grid,
         },
+        pickupNavigate,
         carryStarted: !!startCarry.carry,
         navigate,
         placed: placed
