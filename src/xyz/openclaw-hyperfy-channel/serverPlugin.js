@@ -1605,19 +1605,30 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
       const snapshot = collectBuildSnapshot(world, config)
 
       let targetCube = null
+      let triedGridLookup = false
       if (typeof body.entityId === 'string' && body.entityId.trim()) {
         targetCube = snapshot.cubes.find(c => c.entityId === body.entityId) || null
-      } else if (body.grid && typeof body.grid === 'object') {
+      } else {
+        const gridInput =
+          (body.grid && typeof body.grid === 'object' && body.grid) ||
+          (body.targetGrid && typeof body.targetGrid === 'object' && body.targetGrid) ||
+          (body.sourceGrid && typeof body.sourceGrid === 'object' && body.sourceGrid) ||
+          (body.voxel && typeof body.voxel === 'object' && body.voxel) ||
+          null
+        if (gridInput) {
+          triedGridLookup = true
         const grid = {
-          x: Number.parseInt(body.grid.x, 10),
-          y: Number.parseInt(body.grid.y, 10),
-          z: Number.parseInt(body.grid.z, 10),
+            x: Number.parseInt(gridInput.x, 10),
+            y: Number.parseInt(gridInput.y, 10),
+            z: Number.parseInt(gridInput.z, 10),
         }
         if (![grid.x, grid.y, grid.z].every(Number.isInteger)) {
           return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'grid requires integer x,y,z' })
         }
         targetCube = snapshot.occupied.get(voxelKey(grid)) || null
-      } else {
+        }
+      }
+      if (!targetCube && !(typeof body.entityId === 'string' && body.entityId.trim()) && !triedGridLookup) {
         return reply.code(400).send({ error: 'INVALID_PARAMS', message: 'entityId or grid is required' })
       }
 
@@ -1640,6 +1651,47 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
       return {
         ok: true,
         removed: targetCube,
+        limits: nextSnapshot.limits,
+      }
+    })
+  })
+
+  fastify.post(`${config.routePrefix}/build/remove-all`, async (req, reply) => {
+    if (!requireBuildEnabled(reply)) return
+    if (!requireOutboundAuth(req, reply)) return
+    if (!requireBuildWorld(reply)) return
+    return runBuildMutation(reply, async () => {
+      const snapshot = collectBuildSnapshot(world, config)
+      const removed = []
+      const skippedPinned = []
+      const failed = []
+
+      for (const cube of snapshot.cubes) {
+        if (state.carry?.entityId === cube.entityId) {
+          failed.push({ entityId: cube.entityId, reason: 'CARRY_ACTIVE' })
+          continue
+        }
+        if (config.build.protectPinned && cube.pinned) {
+          skippedPinned.push({ entityId: cube.entityId, grid: cube.grid })
+          continue
+        }
+        const ok = removeAppEntity(world, cube.entityId)
+        if (ok) {
+          removed.push({ entityId: cube.entityId, grid: cube.grid })
+        } else {
+          failed.push({ entityId: cube.entityId, reason: 'NOT_FOUND' })
+        }
+      }
+
+      const nextSnapshot = collectBuildSnapshot(world, config)
+      return {
+        ok: failed.length === 0,
+        removed,
+        removedCount: removed.length,
+        skippedPinned,
+        skippedPinnedCount: skippedPinned.length,
+        failed,
+        failedCount: failed.length,
         limits: nextSnapshot.limits,
       }
     })
@@ -1859,6 +1911,12 @@ export async function openClawGatewayPlugin(fastify, opts = {}) {
       'build.move': { method: 'POST', path: `${config.routePrefix}/build/move` },
       'build.place': { method: 'POST', path: `${config.routePrefix}/build/place` },
       'build.remove': { method: 'POST', path: `${config.routePrefix}/build/remove` },
+      'build.remove-all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'build.remove_all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'build.clear': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'build.clear-all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'build.clear_all': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
+      'build.clear-all-cubes': { method: 'POST', path: `${config.routePrefix}/build/remove-all` },
     }
 
     const target = routeMap[type]
