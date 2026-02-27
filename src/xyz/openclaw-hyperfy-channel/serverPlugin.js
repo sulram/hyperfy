@@ -207,7 +207,7 @@ function loadConfig() {
     build: {
       enabled: true,
       maxCubes: parseIntegerMin(process.env.OPENCLAW_GATEWAY_BUILD_MAX_CUBES, 256, 1),
-      maxStackHeight: 4,
+      maxStackHeight: parseIntegerMin(process.env.OPENCLAW_GATEWAY_BUILD_MAX_STACK_HEIGHT, 4, 1),
       voxelSize: 1,
       gridOrigin: {
         x: 0,
