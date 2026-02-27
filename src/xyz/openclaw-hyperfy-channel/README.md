@@ -11,7 +11,7 @@ This project is the second half of `src/xyz`:
 
 - `serverPlugin.js` - embedded gateway inside the Hyperfy server process
 - `hyperfy-channel/` - OpenClaw plugin scaffold for the `hyperfy` channel
-- `skills/gateway-agent/SKILL.md` - operational skill for agents that act through the gateway
+- `../skills/gateway-agent/SKILL.md` - operational skill for agents that act through the gateway
 
 These are the only runtime pieces that still matter here:
 
@@ -409,4 +409,4 @@ If you only need plugin configuration:
 
 If you need operational behavior for gateway actions and build commands:
 
-- read `skills/gateway-agent/SKILL.md`
+- read `../skills/gateway-agent/SKILL.md`

@@ -8,7 +8,7 @@ This README is intentionally short. The main integration documentation lives in:
 
 Operational behavior for gateway actions and build commands lives in:
 
-- `../skills/gateway-agent/SKILL.md`
+- `../../skills/gateway-agent/SKILL.md`
 
 ## What to configure in OpenClaw (summary)
 

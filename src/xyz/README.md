@@ -25,7 +25,7 @@ Main guide:
 
 Skill:
 
-- `agents/skills/curl-http-agent/SKILL.md`
+- `skills/curl-http-agent/SKILL.md`
 
 ### `openclaw-hyperfy-channel/`
 
@@ -45,7 +45,7 @@ Main guide:
 
 Skill:
 
-- `openclaw-hyperfy-channel/skills/gateway-agent/SKILL.md`
+- `skills/gateway-agent/SKILL.md`
 
 ## Responsibility Split
 

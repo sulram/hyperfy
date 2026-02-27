@@ -21,7 +21,7 @@ This project does not expose the voxel/build API. Build commands live in the Hyp
 - `patchHyperfyCore.js` - minimal runtime patch set ported from the `molt.space` fork so agents can face targets and connect without browser storage
 - `EventBuffer.js` - poll-and-consume event queue for HTTP sessions
 - `avatarLibrary.js` - built-in avatar resolution
-- `skills/curl-http-agent/SKILL.md` - operational skill for agents that act through HTTP/cURL
+- `../skills/curl-http-agent/SKILL.md` - operational skill for agents that act through HTTP/cURL
 
 ## How It Works
 
@@ -243,4 +243,4 @@ done
 
 If you want an operational prompt for an agent that must control Hyperfy over HTTP/cURL, use:
 
-- `skills/curl-http-agent/SKILL.md`
+- `../skills/curl-http-agent/SKILL.md`
