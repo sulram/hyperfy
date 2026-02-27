@@ -1,179 +1,239 @@
 # XYZ Agents
 
-Headless Hyperfy agents with an HTTP/cURL control surface.
+Headless Hyperfy agents with a direct HTTP/cURL and WebSocket control surface.
 
-This project gives you server-side agents that can:
+This project adapts the `molt.space` headless-agent model to Hyperfy: instead of teleporting entities, it simulates player inputs so the agent can walk, run, and navigate visibly inside the world.
 
-- spawn into the world with a name and avatar
-- speak in chat
-- move, run, face, and navigate
-- poll chat, proximity, and navigation events
-- be controlled either through a session URL or the bearer-token API
+Use this project when you need:
 
-The movement model is based on the `molt.space` approach and a small local patch layer that lets headless agents rotate and move visibly inside Hyperfy.
+- direct world control
+- chat replies
+- movement and navigation
+- event polling
+- automation over HTTP/cURL or WebSocket
 
-This project does not expose the voxel/build API. Build commands live in the Hyperfy gateway project at `../openclaw-hyperfy-channel/`.
+Do not use this project for voxel or build actions. Build APIs live in `../openclaw-hyperfy-channel/`.
 
 ## Files That Matter
 
-- `index.js` - session manager, command parser, HTTP endpoints, event buffering, proximity handling
-- `AgentConnection.js` - headless world connection, movement primitives, navigation loop, world-player lookup
-- `patchHyperfyCore.js` - minimal runtime patch set ported from the `molt.space` fork so agents can face targets and connect without browser storage
+- `index.js` - HTTP, session, REST, and WebSocket surfaces
+- `AgentConnection.js` - headless world connection plus movement and navigation
+- `patchHyperfyCore.js` - local Hyperfy runtime patching needed for headless control
 - `EventBuffer.js` - poll-and-consume event queue for HTTP sessions
-- `avatarLibrary.js` - built-in avatar resolution
-- `../skills/curl-http-agent/SKILL.md` - operational skill for agents that act through HTTP/cURL
-
-## How It Works
-
-At runtime, the agent manager creates a node client world, connects it to Hyperfy, and exposes a simple HTTP interface on top:
-
-1. Spawn an agent with `POST /api/spawn`
-2. Save the returned `session` URL or `{ id, token }`
-3. Send plaintext commands to the session URL, or structured HTTP calls to `/api/agents/:id/*`
-4. Poll frequently to receive chat, proximity, and navigation events
-
-The recommended surface is the session URL because it is the simplest for cURL and automation.
+- `avatarLibrary.js` - avatar lookup and `library:*` resolution
+- `../skills/curl-http-agent/SKILL.md` - operational contract for cURL/session-driven agents
 
 ## Scope Boundary
 
-This project is for direct world control only:
+This project owns:
 
+- spawn and despawn
 - chat
-- movement
-- facing
-- navigation
-- session lifecycle
-- event polling
+- walk and run movement
+- world polling
+- navigation toward coordinates or players
+- HTTP session lifecycle
+- bearer-token REST calls
+- WebSocket control
 
-It does not expose:
+This project does not own:
 
+- `build.catalog`
+- `build.snapshot`
+- `build.perception`
 - `build.place`
 - `build.move`
 - `build.remove`
-- `build.perception`
-- `/openclaw-gateway/action`
+- `/openclaw-gateway/*`
 
-If you need build commands, use the gateway project in `../openclaw-hyperfy-channel/`.
+## Important Caveat
 
-## Movement Model
+The API exposes `face` and `look`, including plaintext `face <direction|yaw|auto|@Name>`, but the current handler only acknowledges the request. It does not yet apply a reliable visible facing change to the agent. Document `face` as available syntax, but do not rely on it for gameplay behavior until the handler is wired.
 
-The local patches in `patchHyperfyCore.js` do two important things:
+## How It Works
 
-- inject `simulateLook(yaw)` into the client controls so the agent can face a target
-- allow a node client to connect without relying on browser storage
+At runtime:
 
-The navigation loop in `AgentConnection.js` works by:
+1. the manager creates a node client world
+2. the client connects to Hyperfy
+3. the manager exposes control surfaces on top of that runtime
+4. polling drains buffered events such as chat, proximity, and navigation
 
-1. reading the current position
-2. turning the agent toward the target
-3. holding `forward`, optionally with `shift`
-4. checking distance every 200ms until arrival, timeout, or cancel
+The movement model comes from `molt.space`:
 
-That is the same core idea used in `molt.space`: headless control by simulating player inputs instead of teleporting entities.
+- compute target direction
+- rotate toward it with simulated input
+- hold movement keys
+- monitor distance until arrival, timeout, or cancel
 
-## Recommended Flow
+## API Surfaces
 
-### 1. Spawn
+There are 4 public surfaces here:
+
+1. session spawn: `POST /api/spawn`
+2. session URL: `GET|POST /s/:token`
+3. bearer REST: `/api/agents/:id/*`
+4. WebSocket: `GET /ws/agents`
+
+There are also maintenance/admin routes:
+
+- `GET /agents/health`
+- `GET /api/avatars`
+- `POST /api/agents/admin/despawn`
+- `POST /api/agents/admin/prune-duplicates`
+
+## Spawn Contract
+
+### `POST /api/spawn`
+
+Request:
 
 ```bash
-SPAWN=$(curl -s -X POST "$BASE_URL/api/spawn" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"MyAgent","avatar":"library:devil"}')
-
-SESSION=$(echo "$SPAWN" | jq -r .session)
+curl -s -X POST "$BASE_URL/api/spawn" \
+  -H 'content-type: application/json' \
+  -d '{"name":"MyAgent","avatar":"library:devil"}'
 ```
 
-Response fields:
+Body fields:
 
-- `session` - easiest interface for cURL
-- `id` + `token` - structured REST interface
-- `displayName` - world-visible name, with suffix if needed to avoid collisions
+- `name` - required string, max 32 chars
+- `avatar` - optional avatar ref string such as `library:devil`
 
-### 2. Start polling immediately
+Successful response:
 
-Agents time out after 2 minutes of inactivity. In practice, polling every 3 seconds keeps the session alive and lets the agent react in real time.
-
-```bash
-for i in $(seq 1 200); do
-  RESPONSE=$(curl -s -d "ping" "$SESSION")
-  echo "$RESPONSE" | jq .
-  sleep 3
-done
+```json
+{
+  "id": "agent-id",
+  "token": "bearer-token",
+  "session": "http://host/s/session-token",
+  "name": "MyAgent",
+  "displayName": "MyAgent",
+  "avatar": "/avatars/devil.vrm"
+}
 ```
 
-### 3. Send commands
+Failure:
 
-```bash
-curl -s -d "say Hello world!" "$SESSION"
-curl -s -d "who" "$SESSION"
-curl -s -d "position" "$SESSION"
-curl -s -d "nearby 20" "$SESSION"
-curl -s -d "goto @PlayerName run" "$SESSION"
-curl -s -d "stop" "$SESSION"
+```json
+{
+  "error": "SPAWN_FAILED",
+  "message": "Name too long (max 32 characters)"
+}
 ```
 
-### 4. Despawn when done
+## Session URL Contract
 
-```bash
-curl -s -d "despawn" "$SESSION"
+The session URL is the simplest surface for cURL and automation.
+
+### `GET /s/:token`
+
+Poll pending events.
+
+Success:
+
+```json
+{
+  "ok": true,
+  "events": [],
+  "commands": [
+    "say <text>",
+    "move forward|backward|left|right|jump [ms]",
+    "run forward|backward|left|right|jump [ms]",
+    "face <direction|auto|@Name>",
+    "look <direction|auto|@Name>",
+    "position",
+    "nearby [radius]",
+    "goto <x> <z> [run]",
+    "goto @<Name> [run]",
+    "stop",
+    "who",
+    "ping",
+    "despawn"
+  ]
+}
 ```
 
-## Plaintext Commands
+Auth failures:
 
-Send these to the `session` URL with `POST`:
+- `401 { "ok": false, "error": "Invalid session token" }`
+- `401 { "ok": false, "error": "Session expired" }`
 
-- `say <text>` - speak in chat
-- `move <direction> [ms]` - walk `forward`, `backward`, `left`, `right`, or `jump`
-- `run <direction> [ms]` - same as `move`, but with run speed
-- `face <direction|yaw|auto|@Name>` - face a direction, yaw, or another agent
-- `look ...` - alias for `face`
-- `position` - get `{ x, y, z, yaw }`
-- `nearby [radius]` - list nearby agents
-- `goto <x> <z> [run]` - navigate to coordinates
-- `goto @Name [run]` - navigate toward another player or agent
-- `who` - list all connected agents with positions
-- `ping` - keepalive + receive pending events
-- `stop` - cancel active navigation
-- `despawn` - leave the world
+### `POST /s/:token`
 
-You can also send multiple commands in one request by separating them with newlines:
+Send raw plaintext commands.
+
+One line = one command. Multiple lines are executed in order.
+
+Example:
 
 ```bash
-curl -s -d "say I am coming to you!
+curl -s -d "say hello
 goto @PlayerName run" "$SESSION"
 ```
 
-## HTTP API Surfaces
+Single-command response:
 
-### Simple session interface
+```json
+{
+  "ok": true,
+  "action": "goto",
+  "status": "started",
+  "target": "PlayerName",
+  "distance": 8.1,
+  "run": true,
+  "events": [],
+  "commands": ["say <text>", "..."]
+}
+```
 
-- `POST /api/spawn`
-- `GET /s/<token>` - poll events
-- `POST /s/<token>` - send plaintext commands
+Multi-command response:
 
-### Bearer-token REST interface
+```json
+{
+  "ok": true,
+  "results": [
+    { "ok": true, "action": "say" },
+    { "ok": true, "action": "goto", "status": "started", "target": "PlayerName" }
+  ],
+  "events": [],
+  "commands": ["say <text>", "..."]
+}
+```
 
-- `GET /api/agents/:id/events?since=`
-- `POST /api/agents/:id/speak`
-- `POST /api/agents/:id/move`
-- `POST /api/agents/:id/face`
-- `POST /api/agents/:id/ping`
-- `DELETE /api/agents/:id`
-- `GET /api/avatars`
-- `GET /health`
+Important:
 
-The session URL is simpler. The bearer-token interface is better if you want explicit auth headers and structured requests.
+- `events[]` are drained on every session poll
+- `who`, `position`, and `nearby` return data in the command result, not as events
+- `goto` starts navigation immediately, but final success or failure appears later in `events[]`
 
-## Events You Will See
+## Plaintext Commands
 
-Polling returns `events[]`. The most important event types are:
+- `say <text>` - returns `{ ok, action: "say", warning? }`
+- `move <direction> [ms]` - returns `{ ok, action: "move", direction, duration }`
+- `run <direction> [ms]` - returns `{ ok, action: "run", direction, duration, run: true }`
+- `position` or `pos` - returns `{ ok, action: "position", x, y, z, yaw }`
+- `nearby [radius]` - returns `{ ok, action: "nearby", radius, agents: [...] }`
+- `who` - returns `{ ok, action: "who", agents: [...] }`
+- `goto <x> <z> [run]` - returns `{ ok, action: "goto", status: "started", target: { x, z }, distance, run? }`
+- `goto @Name [run]` - returns the same start payload, but tracks a player or another agent
+- `stop` - returns `{ ok, action: "stop" }`
+- `ping` - returns `{ ok, action: "pong", agentStatus }`
+- `despawn` - returns `{ ok, action: "despawn" }`
+- `face <direction|yaw|auto|@Name>` / `look <direction|yaw|auto|@Name>` - acknowledged by the API, but currently not reliable as real orientation control
 
-- `chat` - another player or agent spoke
-- `navigate` - async navigation update with `started`, `arrived`, or `failed`
-- `proximity` - agents entered or exited the 5m proximity radius
-- `who` - world snapshot when requested
+Common command errors:
 
-Typical chat event:
+- `Unknown command: ...`
+- `Player not found: @Name`
+- `Duration cannot exceed 10000ms`
+- `Message too long (max 500 characters)`
+- `Agent not connected (...)`
+
+## Event Model
+
+Polling returns `events[]`. These are the important event types:
+
+### `chat`
 
 ```json
 {
@@ -181,66 +241,181 @@ Typical chat event:
   "from": "PlayerName",
   "fromId": "player-id",
   "body": "hello",
-  "createdAt": "..."
+  "id": "chat-id",
+  "createdAt": "2026-02-27T12:34:56.000Z"
 }
 ```
 
-Typical navigation event:
+### `navigate`
+
+Started:
+
+```json
+{
+  "type": "navigate",
+  "status": "started",
+  "target": { "x": 10, "z": 4 },
+  "distance": 12.8,
+  "run": true
+}
+```
+
+Arrived:
 
 ```json
 {
   "type": "navigate",
   "status": "arrived",
-  "distance": 1.2
+  "position": { "x": 10.1, "y": 0, "z": 4.2 },
+  "distance": 0.6
 }
 ```
 
+Failed:
+
+```json
+{
+  "type": "navigate",
+  "status": "failed",
+  "position": { "x": 8.2, "y": 0, "z": 3.1 },
+  "distance": 3.4,
+  "error": "Navigation timeout"
+}
+```
+
+### `proximity`
+
+```json
+{
+  "type": "proximity",
+  "entered": [
+    {
+      "displayName": "PlayerName",
+      "id": "player-id",
+      "position": { "x": 1, "y": 0, "z": 2 },
+      "distance": 2.1
+    }
+  ],
+  "exited": []
+}
+```
+
+### lifecycle
+
+- `{"type":"kicked","code":"..."}`
+- `{"type":"disconnected"}`
+
+## Bearer REST Contract
+
+Use this when you want explicit `Authorization: Bearer <token>` auth instead of the session URL.
+
+Endpoints:
+
+- `GET /api/agents/:id/events?since=<ms-or-date>`
+  Response: `{ events, agentStatus }`
+- `POST /api/agents/:id/speak`
+  Body: `{ "text": "hello" }`
+  Response: `{ "status": "sent", "warning"?: "..." }`
+- `POST /api/agents/:id/move`
+  Body: `{ "direction": "forward", "duration": 1000, "run": true }`
+  Response: `{ "status": "moving"|"running", "direction": "forward", "duration": 1000, "run"?: true }`
+- `POST /api/agents/:id/face`
+  Body: `{ "direction": "left" }` or `{ "direction": null }`
+  Response: `{ "status": "facing", "direction": "left"|"auto" }`
+  Caveat: this is still only an ACK today
+- `POST /api/agents/:id/ping`
+  Response: `{ "status": "pong", "agentStatus": "connected" }`
+- `DELETE /api/agents/:id`
+  Response: `{ "status": "despawned" }`
+
+Common failures:
+
+- `401 { "error": "UNAUTHORIZED" }`
+- `403 { "error": "FORBIDDEN" }`
+- `409 { "error": "NOT_CONNECTED" }`
+- `400 { "error": "INVALID_PARAMS", "message": "..." }`
+
+## WebSocket Contract
+
+Endpoint:
+
+- `GET /ws/agents`
+
+Messages are JSON, not plaintext.
+
+Useful client message types:
+
+- `{ "type": "spawn", "name": "MyAgent", "avatar": "library:devil" }`
+- `{ "type": "speak", "text": "hello" }`
+- `{ "type": "move", "direction": "forward", "duration": 1000, "run": true }`
+- `{ "type": "navigate", "x": 10, "z": 5, "run": true }`
+- `{ "type": "navigate", "target": "@PlayerName", "run": true }`
+- `{ "type": "nearby", "radius": 10 }`
+- `{ "type": "who" }`
+- `{ "type": "ping" }`
+- `{ "type": "stop" }`
+- `{ "type": "list_avatars" }`
+
+Useful server message types:
+
+- `spawned`
+- `chat`
+- `warning`
+- `move`
+- `position`
+- `nearby`
+- `navigate`
+- `who`
+- `avatar_library`
+- `pong`
+- `kicked`
+- `disconnected`
+- `error`
+
+The WebSocket `face` message exists, but it has the same current limitation as the HTTP handler: ACK only.
+
+## Health and Maintenance Endpoints
+
+- `GET /agents/health`
+  Response: `{ status, agents, players, maxAgents }`
+- `GET /api/avatars`
+  Response: `{ avatars }`
+- `POST /api/agents/admin/despawn`
+  Requires admin auth
+  Protected by `ADMIN_CODE`
+  Body: `{ agentId, reason? }`
+- `POST /api/agents/admin/prune-duplicates`
+  Requires admin auth
+  Protected by `ADMIN_CODE`
+  Body: `{ name?, transport?, tag?, keep?, onlyConnected? }`
+
 ## Operational Rules
 
-- Poll every 3 seconds while the agent is active.
-- Treat the session URL as a secret. It contains the token in the path.
-- Use `goto @Name run` to keep tracking a moving person.
-- Use `stop` before issuing a different manual movement plan if navigation is still running.
-- Keep chat under 500 characters.
-- Expect browser players and headless agents to appear together in the same world queries.
+- Poll every 3 seconds while the agent is active
+- Session inactivity TTL is 2 minutes
+- Treat the session URL as a secret
+- Do not claim navigation success until a later `navigate` event says `arrived`
+- Use `stop` before switching from active navigation to a new manual movement plan
+- Keep chat under 500 characters
 
-## Example Polling Loop
+## Minimal cURL Loop
 
 ```bash
-IDLE=0
+SPAWN=$(curl -s -X POST "$BASE_URL/api/spawn" \
+  -H 'content-type: application/json' \
+  -d '{"name":"MyAgent"}')
+
+SESSION=$(echo "$SPAWN" | jq -r .session)
+
 for i in $(seq 1 200); do
   RESPONSE=$(curl -s -d "ping" "$SESSION")
-  FROM=$(echo "$RESPONSE" | jq -r '.events[]? | select(.type=="chat") | .from' | head -1)
-
-  if [ -n "$FROM" ]; then
-    IDLE=0
-    curl -s -d "say Hi $FROM! I am on my way!
-goto @$FROM run" "$SESSION"
-  else
-    IDLE=$((IDLE + 1))
-    if [ "$IDLE" -ge 10 ]; then
-      curl -s -d "move forward 3000" "$SESSION"
-      IDLE=0
-    fi
-  fi
-
+  echo "$RESPONSE" | jq .
   sleep 3
 done
 ```
 
-## Troubleshooting
-
-- Agent does not move visibly:
-  confirm `patchHyperfyCore.js` is loaded before agent startup.
-- `Navigation timeout`:
-  the target may be unreachable within the 30s timeout; retry from a closer point.
-- No chat or proximity events:
-  the session is probably not being polled often enough.
-- Duplicate-looking names:
-  check `displayName`; collisions get a suffix automatically.
-
 ## Skill
 
-If you want an operational prompt for an agent that must control Hyperfy over HTTP/cURL, use:
+For an operational prompt focused on the session interface and real response shapes, use:
 
 - `../skills/curl-http-agent/SKILL.md`

@@ -1,119 +1,67 @@
 # OpenClaw Hyperfy Channel
 
-Guide for the gateway project that connects `Hyperfy` chat and build actions to `OpenClaw`.
+Guide for the gateway project that connects Hyperfy chat and voxel/build actions to OpenClaw.
 
-This project is the second half of `src/xyz`:
+Inside `src/xyz`, the responsibility split is:
 
-- `agents/` controls headless world agents directly over HTTP/cURL and does not expose build commands
-- `openclaw-hyperfy-channel/` connects Hyperfy to OpenClaw and exposes gateway build actions
+- `agents/` controls headless Hyperfy agents directly over HTTP, REST, or WebSocket and does not expose build APIs
+- `openclaw-hyperfy-channel/` owns the OpenClaw integration, outbound replies, and the build gateway under `/openclaw-gateway/*`
 
 ## What This Project Contains
 
-- `serverPlugin.js` - embedded gateway inside the Hyperfy server process
-- `hyperfy-channel/` - OpenClaw plugin scaffold for the `hyperfy` channel
-- `../skills/gateway-agent/SKILL.md` - operational skill for agents that act through the gateway
+- `serverPlugin.js` - the embedded gateway that runs inside the Hyperfy server process
+- `hyperfy-channel/` - the OpenClaw plugin scaffold that posts back into that gateway
+- `../skills/gateway-agent/SKILL.md` - the operational contract for gateway clients and agents
 
-These are the only runtime pieces that still matter here:
+These are the runtime pieces that matter:
 
 - `serverPlugin.js` runs inside Hyperfy and exposes `/openclaw-gateway/*`
-- `hyperfy-channel/` runs inside OpenClaw and sends outbound text/actions to that gateway
+- `hyperfy-channel/` runs inside OpenClaw and sends `/outbound` and `/action` requests back to Hyperfy
 
-## Quick Path
+## Scope Boundary
 
-If Hyperfy is already running with the embedded gateway enabled, the main step is configuring the `hyperfy-channel` plugin in OpenClaw.
+This project owns:
 
-In OpenClaw's `openclaw.json`:
+- forwarding Hyperfy chat to OpenClaw
+- sending OpenClaw replies back into Hyperfy
+- spawning and managing the gateway bot
+- direct external HTTP access to the gateway
+- voxel/build reads and mutations
 
-```json5
-{
-  "plugins": {
-    "entries": {
-      "hyperfy-channel": {
-        "enabled": true,
-        "config": {
-          "bridgeUrl": "https://hyperfy.lulu.tekne.studio/openclaw-gateway",
-          "bridgeToken": ""
-        }
-      }
-    }
-  }
-}
-```
+This project does not own:
 
-Then restart or reload OpenClaw and test outbound speech:
-
-```bash
-curl -s -X POST https://hyperfy.lulu.tekne.studio/openclaw-gateway/outbound \
-  -H 'content-type: application/json' \
-  -d '{"text":"test openclaw channel"}'
-```
-
-If the bot speaks in-world, the outbound path is working.
-
-## Where Each Config Lives
-
-Even on the same machine there are still 2 separate processes:
-
-- `Hyperfy` process - world server + embedded gateway
-- `OpenClaw` process - agent runtime + plugin/channel
-
-Use this split:
-
-- Hyperfy environment variables:
-  `ENABLE_OPENCLAW_GATEWAY`, `OPENCLAW_*`, `OPENCLAW_GATEWAY_*`, `BRIDGE_OUTBOUND_TOKEN`, `HYPERFY_CHANNEL_*`
-- OpenClaw plugin config in `openclaw.json`:
-  `plugins.entries.hyperfy-channel.config.bridgeUrl`
-  `plugins.entries.hyperfy-channel.config.bridgeToken`
-
-Important:
-
-- `OPENCLAW_*` lives in the Hyperfy process because it configures outbound calls from the gateway to OpenClaw.
-- `bridgeUrl` and `bridgeToken` live in OpenClaw because they configure outbound calls from the plugin back to Hyperfy.
+- the direct `agents/` session API
+- agent spawn via `/api/spawn`
+- movement/session control for arbitrary headless agents
 
 ## Architecture
 
-Round-trip message flow:
+Typical round trip:
 
-1. A player speaks in the Hyperfy world.
-2. The gateway agent receives the chat event.
-3. The embedded gateway sends the message to `OPENCLAW_HOOK_URL`.
-4. OpenClaw decides to answer through the `hyperfy` channel.
-5. The `hyperfy-channel` plugin sends `POST /openclaw-gateway/outbound`.
-6. The gateway speaks through the Hyperfy agent, chunking long text into 500-character messages.
+1. a player speaks in Hyperfy
+2. the embedded gateway receives that chat
+3. the gateway forwards it to `OPENCLAW_HOOK_URL`
+4. OpenClaw decides to answer through the `hyperfy` channel
+5. the `hyperfy-channel` plugin sends `POST /openclaw-gateway/outbound`
+6. the gateway speaks through its managed Hyperfy bot
 
-The same gateway also exposes build endpoints and an action router for voxel-based operations.
+The same gateway also exposes a build API and a higher-level `/action` wrapper for voxel operations.
 
-## Direct cURL Access
+## Process Split
 
-External clients can call the gateway directly with `curl` or any other HTTP client.
+Even when both programs run on the same machine, there are 2 distinct processes:
 
-Examples:
+- Hyperfy process
+  Owns `ENABLE_OPENCLAW_GATEWAY`, `OPENCLAW_*`, `OPENCLAW_GATEWAY_*`, and the embedded `serverPlugin.js`
+- OpenClaw process
+  Owns `openclaw.json` and the `hyperfy-channel` plugin config
 
-```bash
-curl -s http://localhost:3000/openclaw-gateway/health
-```
+Use this split:
 
-```bash
-curl -s -X POST http://localhost:3000/openclaw-gateway/action \
-  -H 'content-type: application/json' \
-  -d '{"action":{"type":"build.perception"}}'
-```
+- Hyperfy env vars configure outbound calls from Hyperfy to OpenClaw
+- OpenClaw plugin config controls outbound calls from OpenClaw back to Hyperfy
 
-```bash
-curl -s -X POST http://localhost:3000/openclaw-gateway/build/place \
-  -H 'content-type: application/json' \
-  -d '{"targetGrid":{"x":1,"y":0,"z":0}}'
-```
-
-If `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` is configured, add:
-
-```bash
--H 'authorization: Bearer <token>'
-```
-
-## Embedded Mode Setup
-
-Embedded mode is the recommended deployment model. The gateway runs inside the main Hyperfy server process.
+## Quick Setup
 
 ### Hyperfy server
 
@@ -125,7 +73,7 @@ OPENCLAW_HOOK_URL=http://127.0.0.1:3001/hooks/agent
 OPENCLAW_AGENT=hyperfy-bot
 ```
 
-Recommended auth between OpenClaw and Hyperfy:
+Recommended auth:
 
 ```bash
 OPENCLAW_GATEWAY_OUTBOUND_TOKEN=change-me
@@ -133,7 +81,7 @@ OPENCLAW_GATEWAY_OUTBOUND_TOKEN=change-me
 
 ### OpenClaw plugin
 
-Configure the plugin scaffold in `openclaw.json`:
+In `openclaw.json`:
 
 ```json5
 {
@@ -159,7 +107,7 @@ Health:
 curl -s http://localhost:3000/openclaw-gateway/health
 ```
 
-Outbound reply:
+Outbound:
 
 ```bash
 curl -s -X POST http://localhost:3000/openclaw-gateway/outbound \
@@ -168,25 +116,26 @@ curl -s -X POST http://localhost:3000/openclaw-gateway/outbound \
   -d '{"text":"Test coming from OpenClaw"}'
 ```
 
-## Pairing
+Perception:
 
-In practice, pairing means keeping 3 things aligned:
+```bash
+curl -s http://localhost:3000/openclaw-gateway/build/perception \
+  -H 'authorization: Bearer change-me'
+```
 
-1. Security pairing
+## Pairing Rules
+
+In practice, 3 things must line up:
+
+1. security pairing
    `plugins.entries.hyperfy-channel.config.bridgeToken`
    must match
    `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` or `BRIDGE_OUTBOUND_TOKEN`
-2. Agent pairing
-   `OPENCLAW_AGENT` chooses which OpenClaw agent responds
-3. Channel pairing
+2. agent pairing
+   `OPENCLAW_AGENT` chooses which OpenClaw agent receives forwarded Hyperfy chat
+3. channel pairing
    `OPENCLAW_GATEWAY_CHANNEL_ID` and `OPENCLAW_GATEWAY_CHANNEL_NAME`
    define how the Hyperfy side appears inside OpenClaw
-
-Simplified POC pairing:
-
-- one OpenClaw agent, for example `OPENCLAW_AGENT=hyperfy-bot`
-- one default channel, for example `hyperfy:default:global`
-- one gateway URL in `bridgeUrl`
 
 ## Environment Variables
 
@@ -198,55 +147,62 @@ Simplified POC pairing:
 
 ### Security and auth
 
-- `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` - required by `POST /outbound`
+- `OPENCLAW_GATEWAY_OUTBOUND_TOKEN`
 - `BRIDGE_OUTBOUND_TOKEN` - legacy fallback alias
-- `OPENCLAW_HOOK_BEARER_TOKEN` - bearer sent to OpenClaw webhook
-- `OPENCLAW_WEBHOOK_SECRET` - `x-webhook-secret` sent to OpenClaw
+- `OPENCLAW_HOOK_BEARER_TOKEN`
+- `OPENCLAW_WEBHOOK_SECRET`
 
-### Hyperfy gateway agent
+### Gateway bot identity
 
-- `OPENCLAW_GATEWAY_AGENT_NAME` - bot avatar name, fallback `HYPERFY_AGENT_NAME`, default `OpenClawBot`
-- `OPENCLAW_GATEWAY_AGENT_AVATAR` - bot avatar, fallback `HYPERFY_AGENT_AVATAR`
+- `OPENCLAW_GATEWAY_AGENT_NAME`
+- `OPENCLAW_GATEWAY_AGENT_AVATAR`
 
 ### Channel identity
 
-- `OPENCLAW_GATEWAY_CHANNEL_ID` - fallback `HYPERFY_CHANNEL_ID`, default `hyperfy:default:global`
-- `OPENCLAW_GATEWAY_CHANNEL_NAME` - fallback `HYPERFY_CHANNEL_NAME`, default `Hyperfy Global`
+- `OPENCLAW_GATEWAY_CHANNEL_ID`
+- `OPENCLAW_GATEWAY_CHANNEL_NAME`
 
-### Operations and debug
+### Timeouts and behavior
 
 - `OPENCLAW_GATEWAY_PREFIX` - default `/openclaw-gateway`
-- `OPENCLAW_GATEWAY_TIMEOUT_MS` - default `15000`
-- `OPENCLAW_GATEWAY_DEBUG` - debug logging flag
-- `OPENCLAW_GATEWAY_BUILD_MAX_CUBES` - cube cap for managed build actions, default `256`
-- `OPENCLAW_GATEWAY_BUILD_MAX_STACK_HEIGHT` - max cubes per column, default `4`
+- `OPENCLAW_GATEWAY_TIMEOUT_MS` - outbound OpenClaw webhook timeout, default `15000`
+- `OPENCLAW_GATEWAY_DEBUG`
+- `OPENCLAW_GATEWAY_IDLE_WANDER`
+- `OPENCLAW_GATEWAY_IDLE_AFTER_MS`
+- `OPENCLAW_GATEWAY_IDLE_WANDER_INTERVAL_MS`
+- `OPENCLAW_GATEWAY_IDLE_WANDER_JITTER_MS`
+- `OPENCLAW_GATEWAY_IDLE_WANDER_MIN_RADIUS`
+- `OPENCLAW_GATEWAY_IDLE_WANDER_MAX_RADIUS`
+- `OPENCLAW_GATEWAY_IDLE_WANDER_ARRIVAL_RADIUS`
+- `OPENCLAW_GATEWAY_IDLE_WANDER_TIMEOUT_MS`
+- `OPENCLAW_GATEWAY_IDLE_WANDER_RUN`
+
+### Build limits
+
+- `OPENCLAW_GATEWAY_BUILD_MAX_CUBES` - default `256`
+- `OPENCLAW_GATEWAY_BUILD_MAX_STACK_HEIGHT` - default `4`
 
 ## OpenClaw Plugin Config
 
-This scaffold uses `api.pluginConfig`, not environment variables.
+The OpenClaw scaffold uses `api.pluginConfig`, not environment variables.
 
-Fields in `plugins.entries.hyperfy-channel.config`:
+Fields under `plugins.entries.hyperfy-channel.config`:
 
-- `bridgeUrl` - gateway base URL
-- `bridgeToken` - same value used by `OPENCLAW_GATEWAY_OUTBOUND_TOKEN`
+- `bridgeUrl` - required gateway base URL
+- `bridgeToken` - optional bearer token for `/outbound`, `/action`, and `/build/*`
 
-FAQ: where do I configure `HYPERFY_BRIDGE_URL`?
-
-- in OpenClaw, not in Hyperfy
-- in `openclaw.json`
-- via `plugins.entries.hyperfy-channel.config.bridgeUrl`
-
-## Embedded Gateway Endpoints
+## Endpoint Summary
 
 Default prefix: `/openclaw-gateway`
 
-Core endpoints:
+Open endpoint:
 
 - `GET /openclaw-gateway/health`
+
+Protected when a token is configured:
+
 - `POST /openclaw-gateway/outbound`
-
-Build endpoints:
-
+- `POST /openclaw-gateway/action`
 - `GET /openclaw-gateway/build/catalog`
 - `GET /openclaw-gateway/build/snapshot`
 - `GET /openclaw-gateway/build/perception`
@@ -258,155 +214,594 @@ Build endpoints:
 - `POST /openclaw-gateway/build/carry/start`
 - `POST /openclaw-gateway/build/carry/stop`
 - `POST /openclaw-gateway/build/reposition-auto`
-- `POST /openclaw-gateway/action`
 
-`/outbound` requires `Authorization: Bearer <token>` when a token is configured.
+## Build Model
 
-## Build and Voxel System
+The build layer treats the Hyperfy default cube as one canonical asset class and exposes a voxel contract on top of it.
 
-The build layer treats the Hyperfy default cube as a canonical asset class and exposes a voxel-based control surface to agents.
+Current model:
 
-### Model
-
-- canonical asset class: `default-cube`
+- `assetClassId`: `default-cube`
 - voxel size: `1`
-- grid origin: `[0,0,0]`
-- default per-column max stack height: `4`
-- global managed cube cap: `OPENCLAW_GATEWAY_BUILD_MAX_CUBES`, default `256`
+- grid origin: `{ x: 0, y: 0, z: 0 }`
+- stack cap per `(x,z)` column: `OPENCLAW_GATEWAY_BUILD_MAX_STACK_HEIGHT`
+- global cap: `OPENCLAW_GATEWAY_BUILD_MAX_CUBES`
+- pinned cubes are protected
 
-The product direction is simple:
+Important operational rules:
 
-- agents decide in voxel coordinates
-- the gateway handles the concrete asset and world operations
+- almost every write mutates one cube per request
+- the only bulk deletion route is `build/remove-all`
+- build writes are serialized; concurrent writes return `409 BUILD_BUSY`
+- `build.place` only supports `assetClassId=default-cube`
 
-### Why it exists
+## `/health` Contract
 
-The build system was added so agents can reason in discrete grid cells instead of raw entity ids and manual movement steps.
+### `GET /openclaw-gateway/health`
 
-The gateway now provides:
-
-- world-state perception in voxel space
-- server-side cube placement, move, and removal
-- carry/start and carry/stop operations for visual movement
-- `reposition-auto` so the gateway can choose a managed cube and relocate it automatically
-
-### Canonical actions
-
-Prefer `build.*` names:
-
-- `build.catalog`
-- `build.snapshot`
-- `build.perception`
-- `build.place`
-- `build.move`
-- `build.remove`
-- `build.remove-all`
-- `build.carry.start`
-- `build.carry.stop`
-- `build.carry.status`
-- `build.reposition-auto`
-
-Compatibility aliases such as `place`, `remove`, `clear`, and `perception` still exist, but `build.*` is the stable contract.
-
-### Recommended agent flow
-
-1. Read `build.perception`
-2. Choose `targetGrid`
-3. If `limits.remaining > 0`, use `build.place`
-4. If the cube cap is reached, use `build.remove`, `build.move`, or `build.reposition-auto`
-5. Repeat
-
-`build.perception` is the main agent-safe view because it exposes voxel occupancy, limits, and nearby players without leaking low-level world details into the agent contract.
-
-### Build mutation granularity
-
-Write operations are currently single-target mutations:
-
-- `build.place` places one cube per request
-- `build.move` moves one cube per request
-- `build.remove` removes one cube per request
-- `build.reposition-auto` repositions one cube per request
-
-The only bulk mutation today is `build.remove-all`.
-
-So if an agent wants to place 10 cubes, it should send 10 write requests. In practice these should be sequential, not parallel, because the gateway serializes build mutations and may return `BUILD_BUSY` if another mutation is already in flight.
-
-### Payload shapes
-
-Inside OpenClaw / Hyperfy chat, prefer `hyperfyAction`:
+Response shape:
 
 ```json
 {
-  "hyperfyAction": {
-    "type": "build.place",
-    "input": {
-      "targetGrid": { "x": 3, "y": 0, "z": 2 }
-    }
+  "status": "ok",
+  "gateway": {
+    "enabled": true,
+    "spawning": false,
+    "queued": 0,
+    "lastSpawnAt": null,
+    "lastForwardAt": null,
+    "lastError": null,
+    "lastInteractionAt": "2026-02-27T12:34:56.000Z",
+    "idleWanderEnabled": false,
+    "idleWanderInFlight": false
+  },
+  "build": {
+    "enabled": true,
+    "maxCubes": 256,
+    "currentCubes": 0,
+    "remaining": 256,
+    "catalogSize": 1,
+    "carry": null,
+    "autoRepositionInFlight": false
+  },
+  "hyperfyAgent": null
+}
+```
+
+## `/outbound` Contract
+
+### `POST /openclaw-gateway/outbound`
+
+Request:
+
+```json
+{
+  "text": "hello from OpenClaw",
+  "metadata": {
+    "to": "hyperfy:player:player-id:PlayerName"
   }
 }
 ```
 
-For external HTTP clients, use `/openclaw-gateway/action` with `action`:
+Rules:
+
+- `text` is required
+- long text is chunked to 500-character chat messages
+- if `metadata.to` targets a Hyperfy player and `approachOnOutbound` is enabled, the gateway may move the bot toward that player
+
+Success response:
+
+```json
+{
+  "ok": true,
+  "queued": 1,
+  "queueDepth": 1,
+  "truncatedByChunking": false
+}
+```
+
+Failure example:
+
+```json
+{
+  "error": "INVALID_PARAMS",
+  "message": "text is required"
+}
+```
+
+## `/action` Contract
+
+### Envelope
+
+The action router accepts exactly one action per request.
+
+Preferred body:
 
 ```json
 {
   "action": {
     "type": "build.place",
     "input": {
-      "targetGrid": { "x": 3, "y": 0, "z": 2 }
+      "targetGrid": { "x": 1, "y": 0, "z": 0 }
     }
   }
 }
 ```
 
-### Transport rule
+Also accepted:
 
-- In-world Hyperfy agents using the OpenClaw channel should use `hyperfyAction`.
-- External scripts and cURL clients should use `POST /openclaw-gateway/action`.
+- `{ "hyperfyAction": { ... } }`
+- `{ "type": "build.place", "input": { ... } }`
+- `params` instead of `input`
 
-That split keeps chat agents free from bearer-token and HTTP details while still allowing full external automation.
+### Supported canonical action names
 
-### Current implementation status
+- `build.catalog`
+- `build.snapshot`
+- `build.perception`
+- `build.carry.status`
+- `build.carry.start`
+- `build.carry.stop`
+- `build.reposition-auto`
+- `build.place`
+- `build.move`
+- `build.remove`
+- `build.remove-all`
 
-Implemented:
+Compatibility aliases exist, including:
 
-- build catalog and snapshot
-- voxel perception
-- server-side `place`, `move`, `remove`, and `remove-all`
-- carry start, stop, and status
-- simple build-operation locking
-- gateway action routing for `build.*`
-- `reposition-auto`
+- `catalog`
+- `snapshot`
+- `perception`
+- `carry.status`
+- `carry.start`
+- `carry.stop`
+- `place`
+- `move`
+- `remove`
+- `clear`
+- `remove_all`
+- `reposition_auto`
 
-Still planned:
+Prefer canonical `build.*` names in docs and prompts.
+If the intent is "clear all cubes", prefer `build.remove-all` in new clients.
 
-- consolidate the "cap reached means move/remove only" rule into a simpler default behavior
-- animate full build execution with `navigateTo` plus placement
-- idle builder behavior that chooses a new `targetGrid` automatically
-- a gateway planner that turns voxel intent into pick/carry/navigate/drop steps
-- support for new asset classes with non-cube footprints
+### Successful response shape
 
-## Quick Troubleshooting
+```json
+{
+  "ok": true,
+  "action": "build.place",
+  "canonicalAction": "build.place",
+  "result": {
+    "ok": true,
+    "placed": {
+      "entityId": "cube-id",
+      "assetClassId": "default-cube",
+      "grid": { "x": 1, "y": 0, "z": 0 },
+      "position": { "x": 1, "y": 0, "z": 0 }
+    },
+    "limits": {
+      "maxCubes": 256,
+      "currentCubes": 1,
+      "remaining": 255
+    }
+  },
+  "statusCode": 200
+}
+```
 
-- `401` on `/outbound`
-  the OpenClaw plugin token does not match `OPENCLAW_GATEWAY_OUTBOUND_TOKEN`
-- Hyperfy messages do not reach OpenClaw
-  check `OPENCLAW_HOOK_URL`, `OPENCLAW_AGENT`, and webhook auth
-- Health is ok, but the bot does not speak in-world
-  verify that the gateway agent actually spawned and connected
+### Failure response shape
+
+```json
+{
+  "ok": false,
+  "action": "place",
+  "canonicalAction": "build.place",
+  "result": {
+    "error": "VOXEL_OCCUPIED",
+    "message": "Target voxel is already occupied"
+  },
+  "statusCode": 409,
+  "help": {
+    "requestedType": "place",
+    "canonicalType": "build.place",
+    "examples": [
+      {
+        "type": "build.place",
+        "input": {
+          "targetGrid": { "x": 1, "y": 0, "z": 0 }
+        }
+      }
+    ]
+  }
+}
+```
+
+Interpretation rules:
+
+- trust `statusCode` and `result.error`
+- if `help` is present, use the canonical parameter names there
+- `/action` is a wrapper around the direct routes, not a batch API
+
+## Direct Build API Contracts
+
+### `GET /openclaw-gateway/build/catalog`
+
+Returns:
+
+- `catalog[]` with `id`, `label`, `source`, `voxel`, `blueprintSignature`
+- `limits.maxCubes`
+- `limits.maxStackHeight`
+- `grid.voxelSize`
+- `grid.origin`
+
+### `GET /openclaw-gateway/build/snapshot`
+
+Returns:
+
+- `catalog[]`
+- `limits`
+- `grid`
+- `cubes[]`
+- `evictionCandidates[]`
+
+Each `cubes[]` item includes:
+
+- `entityId`
+- `assetClassId`
+- `blueprintId`
+- `blueprintName`
+- `position`
+- `grid`
+- `quaternion`
+- `scale`
+- `pinned`
+- `mover`
+- `uploader`
+- `createdAt`
+
+### `GET /openclaw-gateway/build/perception`
+
+This is the main read model for agents.
+
+Response:
+
+```json
+{
+  "ok": true,
+  "grid": {
+    "voxelSize": 1,
+    "origin": { "x": 0, "y": 0, "z": 0 },
+    "maxStackHeight": 4
+  },
+  "limits": {
+    "maxCubes": 256,
+    "currentCubes": 1,
+    "remaining": 255
+  },
+  "catalog": [
+    {
+      "id": "default-cube",
+      "voxel": {
+        "size": [1, 1, 1],
+        "stackable": true,
+        "maxStackHeight": 4
+      }
+    }
+  ],
+  "voxels": [
+    { "x": 1, "y": 0, "z": 0, "assetClassId": "default-cube" }
+  ],
+  "players": [
+    {
+      "id": "player-id",
+      "name": "PlayerName",
+      "position": { "x": 0, "y": 0, "z": 0 },
+      "grid": { "x": 0, "y": 0, "z": 0 },
+      "isManagedAgent": false,
+      "isGatewayAgent": false
+    }
+  ],
+  "carrying": false
+}
+```
+
+### `GET /openclaw-gateway/build/carry/status`
+
+Returns:
+
+- `carrying`
+- `carry.entityId`
+- `carry.moverToken`
+- `carry.offset`
+- `carry.intervalMs`
+- `carry.position`
+
+## Mutation Contracts
+
+### `POST /openclaw-gateway/build/place`
+
+Preferred request:
+
+```json
+{
+  "targetGrid": { "x": 1, "y": 0, "z": 0 }
+}
+```
+
+Also accepted:
+
+- `grid`
+- `voxel`
+- optional `assetClassId`, but it must still be `default-cube`
+
+Success returns `placed` and `limits`.
+
+Common failures:
+
+- `400 INVALID_PARAMS`
+- `409 VOXEL_OCCUPIED`
+- `409 MAX_STACK_HEIGHT_REACHED`
+- `409 MAX_CUBES_REACHED`
+- `500 DEFAULT_CUBE_NOT_FOUND`
+
+### `POST /openclaw-gateway/build/move`
+
+Preferred request:
+
+```json
+{
+  "sourceGrid": { "x": 1, "y": 0, "z": 0 },
+  "targetGrid": { "x": 2, "y": 0, "z": 0 }
+}
+```
+
+Source selectors accepted:
+
+- `entityId`
+- `sourceGrid`
+- `fromGrid`
+- `grid`
+- `voxel`
+
+Target selectors accepted:
+
+- `targetGrid`
+- `toGrid`
+- `gridTo`
+
+Success returns:
+
+- `moved`
+- `fromGrid`
+- `toGrid`
+- `limits`
+
+Common failures:
+
+- `400 INVALID_PARAMS`
+- `404 NOT_FOUND`
+- `409 CARRY_ACTIVE`
+- `409 PINNED`
+- `409 VOXEL_OCCUPIED`
+- `409 MAX_STACK_HEIGHT_REACHED`
+
+### `POST /openclaw-gateway/build/remove`
+
+Preferred request:
+
+```json
+{
+  "targetGrid": { "x": 1, "y": 0, "z": 0 }
+}
+```
+
+Also accepted:
+
+- `entityId`
+- `grid`
+- `sourceGrid`
+- `voxel`
+
+Success returns `removed` and `limits`.
+
+Common failures:
+
+- `400 INVALID_PARAMS`
+- `404 NOT_FOUND`
+- `409 CARRY_ACTIVE`
+- `409 PINNED`
+
+### `POST /openclaw-gateway/build/remove-all`
+
+This is the only bulk mutation route.
+
+Success returns:
+
+- `removed[]`
+- `removedCount`
+- `skippedPinned[]`
+- `skippedPinnedCount`
+- `failed[]`
+- `failedCount`
+- `limits`
+
+### `POST /openclaw-gateway/build/carry/start`
+
+Behavior:
+
+- grabs an existing cube
+- does not create a cube
+- if no cube is specified, it selects the nearest movable cube to the gateway agent
+
+Accepted selectors:
+
+- `entityId`
+- `sourceGrid`
+- `grid`
+- `targetGrid`
+- `voxel`
+
+Optional:
+
+- `offset.forward`
+- `offset.right`
+- `offset.up`
+
+Success returns:
+
+- `carry.entityId`
+- `carry.moverToken`
+- `carry.offset`
+- `carry.intervalMs`
+- `carrying: true`
+
+### `POST /openclaw-gateway/build/carry/stop`
+
+Optional request:
+
+```json
+{
+  "targetGrid": { "x": 2, "y": 0, "z": 0 },
+  "snapToGrid": true
+}
+```
+
+Rules:
+
+- `snapToGrid` defaults to `true`
+- if nothing is being carried, success returns `{ ok: true, carrying: false, carry: null }`
+
+Success returns:
+
+- `stopped`
+- `entityId`
+- optional `position`
+- optional `grid`
+- `limits`
+
+### `POST /openclaw-gateway/build/reposition-auto`
+
+Preferred request:
+
+```json
+{
+  "targetGrid": { "x": 2, "y": 0, "z": 0 }
+}
+```
+
+Optional inputs:
+
+- `entityId`
+- `sourceGrid`
+- `arrivalRadius`
+- `timeoutMs`
+- `run`
+- `approachSource`
+- `carryOffset`
+
+Behavior:
+
+1. optionally navigate to the source cube
+2. start carry
+3. navigate to the target voxel
+4. drop and snap to `targetGrid`
+
+Success returns:
+
+- `targetGrid`
+- `targetWorld`
+- `selected`
+- `pickupNavigate`
+- `carryStarted`
+- `navigate`
+- `placed`
+- `limits`
+
+Common failures:
+
+- `400 INVALID_PARAMS`
+- `404 NOT_FOUND`
+- `409 BUILD_BUSY`
+- `409 VOXEL_OCCUPIED`
+- `409 MAX_STACK_HEIGHT_REACHED`
+- `409 AGENT_NOT_READY`
+- `409 PICKUP_NAVIGATION_FAILED`
+- `409 NAVIGATION_FAILED`
+
+## Common Error Codes
+
+Global or routing:
+
+- `UNAUTHORIZED`
+- `BUILD_DISABLED`
+- `WORLD_UNAVAILABLE`
+- `UNSUPPORTED_ACTION`
+
+Build mutation flow:
+
+- `BUILD_BUSY`
+- `INVALID_PARAMS`
+- `NOT_FOUND`
+- `PINNED`
+- `CARRY_ACTIVE`
 - `VOXEL_OCCUPIED`
-  choose a different `targetGrid`
+- `MAX_STACK_HEIGHT_REACHED`
 - `MAX_CUBES_REACHED`
-  remove, move, or reposition an existing cube before placing a new one
+- `DEFAULT_CUBE_NOT_FOUND`
+- `AGENT_REQUIRED`
+- `AGENT_NOT_READY`
+- `PICKUP_NAVIGATION_FAILED`
+- `NAVIGATION_FAILED`
 
-## OpenClaw Plugin Scaffold
+## Recommended Agent Flow
 
-The `hyperfy-channel/` directory contains the plugin manifest and scaffold that sends replies back to the gateway.
+1. read `build.perception`
+2. decide in voxel coordinates
+3. write one mutation
+4. inspect `limits` or refresh `build.perception`
+5. continue sequentially
 
-If you only need plugin configuration:
+If you need to create multiple cubes, send multiple sequential requests. The gateway does not support a general multi-place batch endpoint today.
 
-- read `hyperfy-channel/README.md`
+## Direct cURL Examples
 
-If you need operational behavior for gateway actions and build commands:
+Read perception:
 
-- read `../skills/gateway-agent/SKILL.md`
+```bash
+curl -s http://localhost:3000/openclaw-gateway/build/perception \
+  -H 'authorization: Bearer change-me'
+```
+
+Place via `/action`:
+
+```bash
+curl -s -X POST http://localhost:3000/openclaw-gateway/action \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer change-me' \
+  -d '{
+    "action": {
+      "type": "build.place",
+      "input": {
+        "targetGrid": { "x": 1, "y": 0, "z": 0 }
+      }
+    }
+  }'
+```
+
+Move via direct route:
+
+```bash
+curl -s -X POST http://localhost:3000/openclaw-gateway/build/move \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer change-me' \
+  -d '{
+    "sourceGrid": { "x": 1, "y": 0, "z": 0 },
+    "targetGrid": { "x": 2, "y": 0, "z": 0 }
+  }'
+```
+
+## Plugin Scaffold
+
+The OpenClaw-side scaffold is documented briefly in `hyperfy-channel/README.md`. The main API contract remains this file, and the operational prompt lives in `../skills/gateway-agent/SKILL.md`.

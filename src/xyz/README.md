@@ -2,6 +2,11 @@
 
 This folder contains the two experimental agent projects under the `xyz` namespace.
 
+Each project guide now serves 2 roles:
+
+- explain when to use that project
+- document the real API contracts, request envelopes, key response fields, and operational limits
+
 ## Projects
 
 ### `agents/`
@@ -55,5 +60,6 @@ Skill:
 ## Read Order
 
 1. Start here to choose the right project.
-2. Read `agents/README.md` if you need direct HTTP/cURL control.
-3. Read `openclaw-hyperfy-channel/README.md` if you need OpenClaw integration or build actions.
+2. Read `agents/README.md` if you need direct HTTP, cURL, REST, or WebSocket control of a headless agent.
+3. Read `openclaw-hyperfy-channel/README.md` if you need OpenClaw integration, `/outbound`, `/action`, or voxel/build actions.
+4. Use the `skills/` files when you need an operational prompt that already knows the correct envelopes and response shapes.
