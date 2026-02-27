@@ -1,14 +1,18 @@
 # OpenClaw Plugin (Hyperfy Channel)
 
-Este diretório contém o scaffold do plugin/canal `hyperfy` para OpenClaw.
+This directory contains the scaffold for the `hyperfy` plugin/channel for OpenClaw.
 
-Este README e propositalmente curto. A documentacao principal da integracao fica em:
+This README is intentionally short. The main integration documentation lives in:
 
 - `../README.md`
 
-## O que configurar no OpenClaw (resumo)
+Operational behavior for gateway actions and build commands lives in:
 
-No `openclaw.json`:
+- `../skills/gateway-agent/SKILL.md`
+
+## What to configure in OpenClaw (summary)
+
+In `openclaw.json`:
 
 ```json5
 {
@@ -26,17 +30,17 @@ No `openclaw.json`:
 }
 ```
 
-Campos:
+Fields:
 
-- `bridgeUrl` (obrigatorio)
-- `bridgeToken` (opcional)
+- `bridgeUrl` (required)
+- `bridgeToken` (optional)
 
-## Arquivos deste diretório
+## Files in this directory
 
-- `openclaw.plugin.json` — manifest + `configSchema`
-- `index.js` — scaffold do plugin (usa `api.pluginConfig`)
+- `openclaw.plugin.json` - manifest + `configSchema`
+- `index.js` - plugin scaffold (uses `api.pluginConfig`)
 
 ## Status
 
-- Scaffold / referencia inicial
-- Pode exigir ajuste de API conforme a versao real do OpenClaw
+- Initial scaffold / reference
+- May require API adjustments depending on the actual OpenClaw version

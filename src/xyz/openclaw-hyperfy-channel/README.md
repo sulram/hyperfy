@@ -1,12 +1,28 @@
 # OpenClaw Hyperfy Channel
 
-Guia para integrar o chat do `Hyperfy` com um canal/agente do `OpenClaw`.
+Guide for the gateway project that connects `Hyperfy` chat and build actions to `OpenClaw`.
 
-## Caminho rapido (seu caso: Hyperfy ja esta rodando)
+This project is the second half of `src/xyz`:
 
-Se o `Hyperfy` ja esta rodando com o gateway embutido ativo, voce precisa principalmente configurar o plugin/canal no `OpenClaw`.
+- `agents/` controls headless world agents directly over HTTP/cURL and does not expose build commands
+- `openclaw-hyperfy-channel/` connects Hyperfy to OpenClaw and exposes gateway build actions
 
-No `openclaw.json` do OpenClaw:
+## What This Project Contains
+
+- `serverPlugin.js` - embedded gateway inside the Hyperfy server process
+- `hyperfy-channel/` - OpenClaw plugin scaffold for the `hyperfy` channel
+- `skills/gateway-agent/SKILL.md` - operational skill for agents that act through the gateway
+
+These are the only runtime pieces that still matter here:
+
+- `serverPlugin.js` runs inside Hyperfy and exposes `/openclaw-gateway/*`
+- `hyperfy-channel/` runs inside OpenClaw and sends outbound text/actions to that gateway
+
+## Quick Path
+
+If Hyperfy is already running with the embedded gateway enabled, the main step is configuring the `hyperfy-channel` plugin in OpenClaw.
+
+In OpenClaw's `openclaw.json`:
 
 ```json5
 {
@@ -24,90 +40,84 @@ No `openclaw.json` do OpenClaw:
 }
 ```
 
-Depois:
-
-1. Reinicie/recarregue o OpenClaw (para carregar o plugin/config)
-2. Teste no Hyperfy:
+Then restart or reload OpenClaw and test outbound speech:
 
 ```bash
 curl -s -X POST https://hyperfy.lulu.tekne.studio/openclaw-gateway/outbound \
   -H 'content-type: application/json' \
-  -d '{"text":"teste channel openclaw"}'
+  -d '{"text":"test openclaw channel"}'
 ```
 
-Se esse POST fizer o bot falar no mundo, a parte Hyperfy -> gateway esta ok.
+If the bot speaks in-world, the outbound path is working.
 
-## Onde configurar cada config (importante)
+## Where Each Config Lives
 
-Mesmo quando tudo roda no mesmo servidor/host, existem 2 processos diferentes:
+Even on the same machine there are still 2 separate processes:
 
-- processo `Hyperfy` (servidor do mundo + gateway embutido)
-- processo `OpenClaw` (runtime do agente + plugin/canal)
+- `Hyperfy` process - world server + embedded gateway
+- `OpenClaw` process - agent runtime + plugin/channel
 
-Regra pratica:
+Use this split:
 
-- ENVs configuradas no `Hyperfy`:
+- Hyperfy environment variables:
   `ENABLE_OPENCLAW_GATEWAY`, `OPENCLAW_*`, `OPENCLAW_GATEWAY_*`, `BRIDGE_OUTBOUND_TOKEN`, `HYPERFY_CHANNEL_*`
-- Config do plugin no `OpenClaw` (`openclaw.json`):
-  `plugins.entries.hyperfy-channel.config.bridgeUrl`, `plugins.entries.hyperfy-channel.config.bridgeToken`
+- OpenClaw plugin config in `openclaw.json`:
+  `plugins.entries.hyperfy-channel.config.bridgeUrl`
+  `plugins.entries.hyperfy-channel.config.bridgeToken`
 
-Observacao importante:
+Important:
 
-- `OPENCLAW_*` fica no ambiente do `Hyperfy` porque e a configuracao de saida do gateway para chamar o OpenClaw.
-- `bridgeUrl/bridgeToken` ficam no `openclaw.json` do `OpenClaw` porque sao configuracao do plugin para chamar o gateway do Hyperfy.
+- `OPENCLAW_*` lives in the Hyperfy process because it configures outbound calls from the gateway to OpenClaw.
+- `bridgeUrl` and `bridgeToken` live in OpenClaw because they configure outbound calls from the plugin back to Hyperfy.
 
-## FAQ: onde eu configuro `HYPERFY_BRIDGE_URL`?
+## Architecture
 
-Resposta curta:
+Round-trip message flow:
 
-- no OpenClaw, nao no Hyperfy
-- em `openclaw.json`, via `plugins.entries.hyperfy-channel.config.bridgeUrl`
-- este scaffold usa `api.pluginConfig` (sem fallback por env)
+1. A player speaks in the Hyperfy world.
+2. The gateway agent receives the chat event.
+3. The embedded gateway sends the message to `OPENCLAW_HOOK_URL`.
+4. OpenClaw decides to answer through the `hyperfy` channel.
+5. The `hyperfy-channel` plugin sends `POST /openclaw-gateway/outbound`.
+6. The gateway speaks through the Hyperfy agent, chunking long text into 500-character messages.
 
-O codigo do scaffold fica em:
+The same gateway also exposes build endpoints and an action router for voxel-based operations.
 
-- `src/xyz/openclaw-hyperfy-channel/hyperfy-channel/index.js`
+## Direct cURL Access
 
-Ou seja:
+External clients can call the gateway directly with `curl` or any other HTTP client.
 
-- voce configura isso no `openclaw.json` do processo que roda o `OpenClaw`
-- nao no `src/server` do Hyperfy
-- e nao no ambiente do processo do Hyperfy
+Examples:
 
-### Opcao A (recomendada): configurar no `openclaw.json`
-
-Exemplo (ajuste o plugin id se necessario):
-
-```json5
-{
-  "plugins": {
-    "entries": {
-      "hyperfy-channel": {
-        "enabled": true,
-        "config": {
-          "bridgeUrl": "https://hyperfy.lulu.tekne.studio/openclaw-gateway",
-          "bridgeToken": ""
-        }
-      }
-    }
-  }
-}
+```bash
+curl -s http://localhost:3000/openclaw-gateway/health
 ```
 
-No OpenClaw real, isso e suportado pelo sistema de plugins (`plugins.entries.<pluginId>.config`).
+```bash
+curl -s -X POST http://localhost:3000/openclaw-gateway/action \
+  -H 'content-type: application/json' \
+  -d '{"action":{"type":"build.perception"}}'
+```
 
-Observacao:
+```bash
+curl -s -X POST http://localhost:3000/openclaw-gateway/build/place \
+  -H 'content-type: application/json' \
+  -d '{"targetGrid":{"x":1,"y":0,"z":0}}'
+```
 
-- `~/.openclaw/openclaw.json` (ou `/root/.openclaw/openclaw.json`) continua sendo a config do OpenClaw/Gateway (ex.: `gateway.mode`, `gateway.port`, `hooks.*`)
-- e agora tambem pode carregar a config do plugin `hyperfy-channel` em `plugins.entries.<id>.config`
+If `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` is configured, add:
 
-## TL;DR (POC simplificada, mesmo servidor/host)
+```bash
+-H 'authorization: Bearer <token>'
+```
 
-Se voce esta em POC e tudo roda no mesmo servidor/host, use o minimo:
+## Embedded Mode Setup
 
-Se o Hyperfy ainda nao estiver configurado, siga este bloco.
+Embedded mode is the recommended deployment model. The gateway runs inside the main Hyperfy server process.
 
-### Hyperfy (servidor)
+### Hyperfy server
+
+Minimum environment:
 
 ```bash
 ENABLE_OPENCLAW_GATEWAY=1
@@ -115,9 +125,15 @@ OPENCLAW_HOOK_URL=http://127.0.0.1:3001/hooks/agent
 OPENCLAW_AGENT=hyperfy-bot
 ```
 
-Essas 3 ENVs acima vao no processo do `Hyperfy`.
+Recommended auth between OpenClaw and Hyperfy:
 
-### OpenClaw (`openclaw.json`, plugin/canal)
+```bash
+OPENCLAW_GATEWAY_OUTBOUND_TOKEN=change-me
+```
+
+### OpenClaw plugin
+
+Configure the plugin scaffold in `openclaw.json`:
 
 ```json5
 {
@@ -127,140 +143,6 @@ Essas 3 ENVs acima vao no processo do `Hyperfy`.
         "enabled": true,
         "config": {
           "bridgeUrl": "http://127.0.0.1:3000/openclaw-gateway",
-          "bridgeToken": ""
-        }
-      }
-    }
-  }
-}
-```
-
-Essa configuracao vai no `openclaw.json` do `OpenClaw`.
-
-### Teste rapido
-
-```bash
-curl -s -X POST http://127.0.0.1:3000/openclaw-gateway/outbound \
-  -H 'content-type: application/json' \
-  -d '{"text":"Teste POC"}'
-```
-
-Nesta POC simplificada:
-
-- sem token de `/outbound` (auth opcional)
-- sem customizar `CHANNEL_ID/CHANNEL_NAME` (defaults)
-- sem avatar custom do bot (default)
-- pairing = URL do gateway + `OPENCLAW_AGENT`
-
-Este diretório agora suporta dois modos:
-
-- `Modo embutido (recomendado)`:
-  o gateway roda dentro do servidor Hyperfy como plugin Fastify (`serverPlugin.js`)
-- `Modo bridge separado (POC)`:
-  um processo Node/Docker independente (`src/`)
-
-## Como funciona (visao geral)
-
-Fluxo de ida e volta:
-
-1. Um jogador fala no mundo Hyperfy.
-2. O agente gateway (avatar bot no Hyperfy) recebe o evento de chat.
-3. O gateway envia esse texto para `OPENCLAW_HOOK_URL` (webhook de entrada do OpenClaw).
-4. O OpenClaw processa e decide responder pelo canal `hyperfy`.
-5. O plugin/canal do OpenClaw faz `POST /outbound` no gateway.
-6. O gateway manda `speak` no agente Hyperfy (com chunking de 500 chars).
-
-## O que e "pairing"
-
-Neste contexto, "pairing" e o pareamento de 3 coisas:
-
-1. `Pairing de seguranca (token)`
-   o token de saida do plugin OpenClaw deve bater com o token aceito pelo gateway.
-2. `Pairing de agente (OpenClaw agent)`
-   o `OPENCLAW_AGENT` define qual agente/persona do OpenClaw processa as mensagens do Hyperfy.
-3. `Pairing de canal (identidade)`
-   `HYPERFY_CHANNEL_ID` / `HYPERFY_CHANNEL_NAME` (ou `OPENCLAW_GATEWAY_CHANNEL_*`) definem como esse canal aparece para o OpenClaw.
-
-Resumo pratico:
-
-- `plugins.entries.hyperfy-channel.config.bridgeToken` (OpenClaw) == `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` (ou `BRIDGE_OUTBOUND_TOKEN`) no gateway
-- `OPENCLAW_AGENT` aponta para o agente certo no OpenClaw
-- `plugins.entries.hyperfy-channel.config.bridgeUrl` aponta para o endpoint correto do gateway (`/openclaw-gateway/outbound` por padrao no modo embutido)
-
-### Pairing simplificado (POC)
-
-Se tudo esta no mesmo servidor/host e voce quer validar rapido:
-
-- nao use token por enquanto
-- mantenha 1 canal default (`hyperfy:default:global`)
-- escolha 1 agente OpenClaw fixo (`OPENCLAW_AGENT=hyperfy-bot`)
-
-Ou seja, o "pairing" vira basicamente:
-
-- `OPENCLAW_AGENT` (quem responde)
-- `bridgeUrl` no plugin `hyperfy-channel` (para onde o OpenClaw envia a resposta)
-
-## Estrutura
-
-- `serverPlugin.js` — gateway embutido no servidor Hyperfy (recomendado)
-- `src/` — bridge HTTP/WS separado (POC legado, ainda util para testes isolados)
-- `hyperfy-channel/` — scaffold de plugin/canal `hyperfy` para o OpenClaw
-
-## Modo embutido (recomendado)
-
-O gateway roda dentro do processo principal do Hyperfy, sem WebSocket loopback interno e sem um terceiro servico.
-
-### Passo a passo
-
-1. Ative o plugin no servidor Hyperfy
-
-Adicione no ambiente do servidor:
-
-```bash
-ENABLE_OPENCLAW_GATEWAY=1
-```
-
-2. Configure a conexao com o OpenClaw (obrigatorio)
-
-```bash
-OPENCLAW_HOOK_URL=http://SEU-OPENCLAW/hooks/agent
-OPENCLAW_AGENT=hyperfy-bot
-```
-
-3. Configure autenticacao entre plugin OpenClaw e gateway (recomendado)
-
-```bash
-OPENCLAW_GATEWAY_OUTBOUND_TOKEN=change-me
-```
-
-No plugin do OpenClaw, use o mesmo valor em `plugins.entries.hyperfy-channel.config.bridgeToken`.
-
-Para POC, voce pode pular este passo e deixar sem token.
-
-4. Suba o servidor Hyperfy
-
-O Hyperfy vai registrar o plugin e spawnar um agente gateway persistente.
-
-5. Teste o health do gateway
-
-Por padrao:
-
-```bash
-curl -s http://localhost:3000/openclaw-gateway/health
-```
-
-6. Configure o plugin/canal no OpenClaw
-
-Use o scaffold em `hyperfy-channel/` e configure:
-
-```json5
-{
-  "plugins": {
-    "entries": {
-      "hyperfy-channel": {
-        "enabled": true,
-        "config": {
-          "bridgeUrl": "http://SEU-HYPERFY:3000/openclaw-gateway",
           "bridgeToken": "change-me"
         }
       }
@@ -269,189 +151,262 @@ Use o scaffold em `hyperfy-channel/` e configure:
 }
 ```
 
-7. Teste envio de resposta para o Hyperfy (manual)
+### Manual checks
+
+Health:
+
+```bash
+curl -s http://localhost:3000/openclaw-gateway/health
+```
+
+Outbound reply:
 
 ```bash
 curl -s -X POST http://localhost:3000/openclaw-gateway/outbound \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer change-me' \
-  -d '{"text":"Teste vindo do OpenClaw"}'
+  -d '{"text":"Test coming from OpenClaw"}'
 ```
 
-Se o agent gateway estiver spawnado e conectado, ele fala no mundo.
+## Pairing
 
-## ENVs do modo embutido (Hyperfy servidor)
+In practice, pairing means keeping 3 things aligned:
 
-Estas ENVs sao configuradas no processo do `Hyperfy` (servidor do mundo).
-Mesmo as que comecam com `OPENCLAW_` ficam aqui.
+1. Security pairing
+   `plugins.entries.hyperfy-channel.config.bridgeToken`
+   must match
+   `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` or `BRIDGE_OUTBOUND_TOKEN`
+2. Agent pairing
+   `OPENCLAW_AGENT` chooses which OpenClaw agent responds
+3. Channel pairing
+   `OPENCLAW_GATEWAY_CHANNEL_ID` and `OPENCLAW_GATEWAY_CHANNEL_NAME`
+   define how the Hyperfy side appears inside OpenClaw
 
-### Minimo para POC
+Simplified POC pairing:
 
-- `ENABLE_OPENCLAW_GATEWAY=1`
-- `OPENCLAW_HOOK_URL=...`
-- `OPENCLAW_AGENT=...`
+- one OpenClaw agent, for example `OPENCLAW_AGENT=hyperfy-bot`
+- one default channel, for example `hyperfy:default:global`
+- one gateway URL in `bridgeUrl`
 
-Todo o resto e opcional no inicio.
+## Environment Variables
 
-### Obrigatorias
-
-- `ENABLE_OPENCLAW_GATEWAY`
-  ativa o plugin embutido (`1`, `true`, `yes`, `on`)
-- `OPENCLAW_HOOK_URL`
-  webhook de entrada do OpenClaw (mensagens do Hyperfy -> OpenClaw)
-- `OPENCLAW_AGENT`
-  id/nome do agente do OpenClaw que processa esse canal
-
-### Seguranca / auth
-
-- `OPENCLAW_GATEWAY_OUTBOUND_TOKEN`
-  token exigido em `POST /outbound` (recomendado)
-- `BRIDGE_OUTBOUND_TOKEN`
-  alias legado (fallback)
-- `OPENCLAW_HOOK_BEARER_TOKEN`
-  bearer enviado pelo gateway ao webhook do OpenClaw (se o OpenClaw exigir)
-- `OPENCLAW_WEBHOOK_SECRET`
-  header `x-webhook-secret` enviado ao OpenClaw (se exigido)
-
-### Agente Hyperfy (gateway bot)
-
-- `OPENCLAW_GATEWAY_AGENT_NAME`
-  nome do avatar bot no mundo (fallback: `HYPERFY_AGENT_NAME`, default `OpenClawBot`)
-- `OPENCLAW_GATEWAY_AGENT_AVATAR`
-  avatar do bot (fallback: `HYPERFY_AGENT_AVATAR`)
-
-### Canal visto pelo OpenClaw
-
-- `OPENCLAW_GATEWAY_CHANNEL_ID`
-  id do canal (fallback: `HYPERFY_CHANNEL_ID`, default `hyperfy:default:global`)
-- `OPENCLAW_GATEWAY_CHANNEL_NAME`
-  nome amigavel (fallback: `HYPERFY_CHANNEL_NAME`, default `Hyperfy Global`)
-
-### Operacao / debug
-
-- `OPENCLAW_GATEWAY_PREFIX`
-  prefixo HTTP do gateway (default `/openclaw-gateway`)
-- `OPENCLAW_GATEWAY_TIMEOUT_MS`
-  timeout de chamadas ao OpenClaw (default `15000`)
-- `OPENCLAW_GATEWAY_DEBUG`
-  logs debug (`1/true/...`)
-
-## Config do plugin OpenClaw (canal `hyperfy`) no `openclaw.json`
-
-Este scaffold usa `api.pluginConfig` (config de plugin), nao ENV.
-
-Campos em `plugins.entries.hyperfy-channel.config`:
-
-- `bridgeUrl`
-  URL base do gateway
-  exemplo (modo embutido): `https://hyperfy.lulu.tekne.studio/openclaw-gateway`
-- `bridgeToken`
-  mesmo valor de `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` (ou `BRIDGE_OUTBOUND_TOKEN`)
-
-### Mapa rapido (quem configura o que)
-
-No `Hyperfy`:
+### Required
 
 - `ENABLE_OPENCLAW_GATEWAY`
 - `OPENCLAW_HOOK_URL`
 - `OPENCLAW_AGENT`
-- `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` (opcional)
-- `OPENCLAW_HOOK_BEARER_TOKEN` / `OPENCLAW_WEBHOOK_SECRET` (opcionais)
-- `OPENCLAW_GATEWAY_AGENT_*` (opcionais)
-- `OPENCLAW_GATEWAY_CHANNEL_*` ou `HYPERFY_CHANNEL_*` (opcionais)
 
-No `OpenClaw`:
+### Security and auth
 
-- `plugins.entries.hyperfy-channel.config.bridgeUrl`
-- `plugins.entries.hyperfy-channel.config.bridgeToken` (opcional na POC, recomendado depois)
+- `OPENCLAW_GATEWAY_OUTBOUND_TOKEN` - required by `POST /outbound`
+- `BRIDGE_OUTBOUND_TOKEN` - legacy fallback alias
+- `OPENCLAW_HOOK_BEARER_TOKEN` - bearer sent to OpenClaw webhook
+- `OPENCLAW_WEBHOOK_SECRET` - `x-webhook-secret` sent to OpenClaw
 
-## Endpoints do gateway embutido
+### Hyperfy gateway agent
 
-Prefixo padrao: `/openclaw-gateway`
+- `OPENCLAW_GATEWAY_AGENT_NAME` - bot avatar name, fallback `HYPERFY_AGENT_NAME`, default `OpenClawBot`
+- `OPENCLAW_GATEWAY_AGENT_AVATAR` - bot avatar, fallback `HYPERFY_AGENT_AVATAR`
+
+### Channel identity
+
+- `OPENCLAW_GATEWAY_CHANNEL_ID` - fallback `HYPERFY_CHANNEL_ID`, default `hyperfy:default:global`
+- `OPENCLAW_GATEWAY_CHANNEL_NAME` - fallback `HYPERFY_CHANNEL_NAME`, default `Hyperfy Global`
+
+### Operations and debug
+
+- `OPENCLAW_GATEWAY_PREFIX` - default `/openclaw-gateway`
+- `OPENCLAW_GATEWAY_TIMEOUT_MS` - default `15000`
+- `OPENCLAW_GATEWAY_DEBUG` - debug logging flag
+- `OPENCLAW_GATEWAY_BUILD_MAX_CUBES` - cube cap for managed build actions, default `256`
+- `OPENCLAW_GATEWAY_BUILD_MAX_STACK_HEIGHT` - max cubes per column, default `4`
+
+## OpenClaw Plugin Config
+
+This scaffold uses `api.pluginConfig`, not environment variables.
+
+Fields in `plugins.entries.hyperfy-channel.config`:
+
+- `bridgeUrl` - gateway base URL
+- `bridgeToken` - same value used by `OPENCLAW_GATEWAY_OUTBOUND_TOKEN`
+
+FAQ: where do I configure `HYPERFY_BRIDGE_URL`?
+
+- in OpenClaw, not in Hyperfy
+- in `openclaw.json`
+- via `plugins.entries.hyperfy-channel.config.bridgeUrl`
+
+## Embedded Gateway Endpoints
+
+Default prefix: `/openclaw-gateway`
+
+Core endpoints:
 
 - `GET /openclaw-gateway/health`
 - `POST /openclaw-gateway/outbound`
-  requer `Authorization: Bearer <token>` se token estiver configurado
 
-Payload de `/outbound`:
+Build endpoints:
+
+- `GET /openclaw-gateway/build/catalog`
+- `GET /openclaw-gateway/build/snapshot`
+- `GET /openclaw-gateway/build/perception`
+- `GET /openclaw-gateway/build/carry/status`
+- `POST /openclaw-gateway/build/place`
+- `POST /openclaw-gateway/build/move`
+- `POST /openclaw-gateway/build/remove`
+- `POST /openclaw-gateway/build/remove-all`
+- `POST /openclaw-gateway/build/carry/start`
+- `POST /openclaw-gateway/build/carry/stop`
+- `POST /openclaw-gateway/build/reposition-auto`
+- `POST /openclaw-gateway/action`
+
+`/outbound` requires `Authorization: Bearer <token>` when a token is configured.
+
+## Build and Voxel System
+
+The build layer treats the Hyperfy default cube as a canonical asset class and exposes a voxel-based control surface to agents.
+
+### Model
+
+- canonical asset class: `default-cube`
+- voxel size: `1`
+- grid origin: `[0,0,0]`
+- default per-column max stack height: `4`
+- global managed cube cap: `OPENCLAW_GATEWAY_BUILD_MAX_CUBES`, default `256`
+
+The product direction is simple:
+
+- agents decide in voxel coordinates
+- the gateway handles the concrete asset and world operations
+
+### Why it exists
+
+The build system was added so agents can reason in discrete grid cells instead of raw entity ids and manual movement steps.
+
+The gateway now provides:
+
+- world-state perception in voxel space
+- server-side cube placement, move, and removal
+- carry/start and carry/stop operations for visual movement
+- `reposition-auto` so the gateway can choose a managed cube and relocate it automatically
+
+### Canonical actions
+
+Prefer `build.*` names:
+
+- `build.catalog`
+- `build.snapshot`
+- `build.perception`
+- `build.place`
+- `build.move`
+- `build.remove`
+- `build.remove-all`
+- `build.carry.start`
+- `build.carry.stop`
+- `build.carry.status`
+- `build.reposition-auto`
+
+Compatibility aliases such as `place`, `remove`, `clear`, and `perception` still exist, but `build.*` is the stable contract.
+
+### Recommended agent flow
+
+1. Read `build.perception`
+2. Choose `targetGrid`
+3. If `limits.remaining > 0`, use `build.place`
+4. If the cube cap is reached, use `build.remove`, `build.move`, or `build.reposition-auto`
+5. Repeat
+
+`build.perception` is the main agent-safe view because it exposes voxel occupancy, limits, and nearby players without leaking low-level world details into the agent contract.
+
+### Build mutation granularity
+
+Write operations are currently single-target mutations:
+
+- `build.place` places one cube per request
+- `build.move` moves one cube per request
+- `build.remove` removes one cube per request
+- `build.reposition-auto` repositions one cube per request
+
+The only bulk mutation today is `build.remove-all`.
+
+So if an agent wants to place 10 cubes, it should send 10 write requests. In practice these should be sequential, not parallel, because the gateway serializes build mutations and may return `BUILD_BUSY` if another mutation is already in flight.
+
+### Payload shapes
+
+Inside OpenClaw / Hyperfy chat, prefer `hyperfyAction`:
 
 ```json
-{ "text": "Oi do OpenClaw" }
+{
+  "hyperfyAction": {
+    "type": "build.place",
+    "input": {
+      "targetGrid": { "x": 3, "y": 0, "z": 2 }
+    }
+  }
+}
 ```
 
-## Como o pairing funciona na pratica
+For external HTTP clients, use `/openclaw-gateway/action` with `action`:
 
-### 1. Pairing do token (plugin OpenClaw -> Hyperfy gateway)
+```json
+{
+  "action": {
+    "type": "build.place",
+    "input": {
+      "targetGrid": { "x": 3, "y": 0, "z": 2 }
+    }
+  }
+}
+```
 
-O plugin `hyperfy-channel/index.js` envia:
+### Transport rule
 
-- `Authorization: Bearer ${pluginConfig.bridgeToken}`
+- In-world Hyperfy agents using the OpenClaw channel should use `hyperfyAction`.
+- External scripts and cURL clients should use `POST /openclaw-gateway/action`.
 
-O gateway embutido valida contra:
+That split keeps chat agents free from bearer-token and HTTP details while still allowing full external automation.
 
-- `OPENCLAW_GATEWAY_OUTBOUND_TOKEN`
-- fallback: `BRIDGE_OUTBOUND_TOKEN`
+### Current implementation status
 
-Se nao bater, retorna `401 UNAUTHORIZED`.
+Implemented:
 
-### 2. Pairing do agente OpenClaw (Hyperfy -> OpenClaw webhook)
+- build catalog and snapshot
+- voxel perception
+- server-side `place`, `move`, `remove`, and `remove-all`
+- carry start, stop, and status
+- simple build-operation locking
+- gateway action routing for `build.*`
+- `reposition-auto`
 
-Quando o Hyperfy envia uma mensagem ao OpenClaw, o gateway manda um payload com:
+Still planned:
 
-- `agent: OPENCLAW_AGENT`
+- consolidate the "cap reached means move/remove only" rule into a simpler default behavior
+- animate full build execution with `navigateTo` plus placement
+- idle builder behavior that chooses a new `targetGrid` automatically
+- a gateway planner that turns voxel intent into pick/carry/navigate/drop steps
+- support for new asset classes with non-cube footprints
 
-Isso determina qual agente do OpenClaw vai responder.
+## Quick Troubleshooting
 
-### 3. Pairing do canal (contexto no OpenClaw)
+- `401` on `/outbound`
+  the OpenClaw plugin token does not match `OPENCLAW_GATEWAY_OUTBOUND_TOKEN`
+- Hyperfy messages do not reach OpenClaw
+  check `OPENCLAW_HOOK_URL`, `OPENCLAW_AGENT`, and webhook auth
+- Health is ok, but the bot does not speak in-world
+  verify that the gateway agent actually spawned and connected
+- `VOXEL_OCCUPIED`
+  choose a different `targetGrid`
+- `MAX_CUBES_REACHED`
+  remove, move, or reposition an existing cube before placing a new one
 
-O gateway envia `channel.id`, `channel.type`, `channel.name`.
+## OpenClaw Plugin Scaffold
 
-Padrao:
+The `hyperfy-channel/` directory contains the plugin manifest and scaffold that sends replies back to the gateway.
 
-- `type = "hyperfy"`
-- `id = hyperfy:default:global`
-- `name = Hyperfy Global`
+If you only need plugin configuration:
 
-Voce pode mudar para separar mundos/salas/instancias.
+- read `hyperfy-channel/README.md`
 
-Exemplo:
+If you need operational behavior for gateway actions and build commands:
 
-- `OPENCLAW_GATEWAY_CHANNEL_ID=hyperfy:metaverso-online:lobby`
-- `OPENCLAW_GATEWAY_CHANNEL_NAME=Metaverso Online Lobby`
-
-## Troubleshooting rapido
-
-- `401` no `/outbound`
-  token do plugin OpenClaw nao bate com `OPENCLAW_GATEWAY_OUTBOUND_TOKEN`
-- mensagens do Hyperfy nao chegam no OpenClaw
-  confira `OPENCLAW_HOOK_URL`, `OPENCLAW_AGENT`, e auth (`OPENCLAW_HOOK_BEARER_TOKEN` / `OPENCLAW_WEBHOOK_SECRET`)
-- gateway health ok, mas bot nao fala no mundo
-  verifique se o agente gateway spawnou/conectou em `/openclaw-gateway/health`
-- respostas cortadas em varias mensagens
-  esperado: o gateway faz chunking em 500 caracteres para `speak`
-
-## Modo bridge separado (POC legado)
-
-Ainda existe para teste isolado e Docker.
-
-Nesse modo:
-
-- use `src/xyz/openclaw-hyperfy-channel/src/`
-- configure `HYPERFY_WS_URL` (aponta para `/ws/agents`)
-- rode a bridge separada
-
-Veja `./.env.example` para o conjunto de variaveis desse modo.
-
-## Plugin OpenClaw (scaffold)
-
-O codigo em `hyperfy-channel/index.js` e um scaffold de plugin custom.
-
-Para configuracao do plugin (OpenClaw), veja tambem:
-
-- `hyperfy-channel/README.md` (versao curta, focada no canal `hyperfy`)
-
-Observacoes:
-
-- A API exata de plugin/canal do OpenClaw pode variar por versao.
-- O scaffold esta preparado para enviar texto para `POST /outbound`.
-- Pode ser necessario ajustar `registerChannel`, `setup(api)` e formato de `message`.
+- read `skills/gateway-agent/SKILL.md`
