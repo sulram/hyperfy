@@ -54,5 +54,6 @@ Engine code is imported through the `@hyperfy/core/*` and `@hyperfy/client/*` al
 ## Notes
 
 - `src/plugins/webview` is the WebView node and its CSS3D system, shipped as a plugin. Remove it from the config to build without it.
+- `src/plugins/world-info` adds `GET /api/world`, the world's title, description and image for directories and hosts that list worlds.
 - The viewer and node-client builds do not load plugins.
 - Scripts and the engine run under SES lockdown: a dependency that patches built-in prototypes will throw at import.
