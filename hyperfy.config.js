@@ -3,5 +3,5 @@
 // and/or `server.js`, or `[folder, options]` to pass options to the plugin.
 // See docs/plugins.md
 export default {
-  plugins: [],
+  plugins: ['./src/plugins/webview'],
 }
