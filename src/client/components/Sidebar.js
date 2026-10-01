@@ -806,7 +806,7 @@ function World({ world, hidden }) {
             value={ao}
             onChange={value => world.settings.set('ao', value, true)}
           />
-          {isAdmin && world.settings.hasAdminCode && (
+          {isAdmin && world.settings.hasAdminCode && !world.settings.hasIdentity && (
             <FieldToggle
               label='Free Build'
               hint='Allow everyone to build (and destroy) things in the world.'
@@ -1857,6 +1857,7 @@ function Players({ world, hidden }) {
   const { setHint } = useContext(HintContext)
   const localPlayer = world.entities.player
   const isAdmin = localPlayer.isAdmin()
+  const canSetRanks = isAdmin && !world.settings.hasIdentity // with an identity provider, ranks come from it
   const [players, setPlayers] = useState(() => getPlayers(world))
   useEffect(() => {
     const onChange = () => {
@@ -1980,7 +1981,7 @@ function Players({ world, hidden }) {
                 {player.speaking && <Volume2Icon size='1rem' />}
                 {player.isMuted() && <MicOffIcon size='1rem' />}
               </div>
-              {isAdmin && player.isRemote && !player.isAdmin() && world.settings.rank < Ranks.BUILDER && (
+              {canSetRanks && player.isRemote && !player.isAdmin() && world.settings.rank < Ranks.BUILDER && (
                 <div
                   className={cls('players-btn', { dim: !player.isBuilder() })}
                   onPointerEnter={() =>
