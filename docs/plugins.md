@@ -51,6 +51,8 @@ Engine code is imported through the `@hyperfy/core/*` and `@hyperfy/client/*` al
 
 **Routes** (server): `ctx.fastify.get(...)` and friends.
 
+**Identity** (server): `world.network.setIdentity(fn)` registers an identity provider. `fn(params)` receives the connection's query params and resolves to `{ id, name, rank }`, or `null` for a guest. With a provider, it owns the ranks: name and rank are taken from it on every connection, a guest is a visitor whatever the database says, and `/admin`, the players-list hammer and the Free Build setting step aside (`world.settings.hasIdentity` is true on both sides). Without a provider nothing changes. On the client, `world.network.params` is a plain object of extra connection params a plugin fills before `world.init()`, for example a token read from the URL.
+
 ## Notes
 
 - `src/plugins/webview` is the WebView node and its CSS3D system, shipped as a plugin. Remove it from the config to build without it.
