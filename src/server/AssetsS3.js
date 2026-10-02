@@ -265,12 +265,14 @@ export class AssetsS3 {
   }
 
   async delete(assets) {
-    if (assets.length === 0) return
+    // the cleaner passes a Set, as list() returns one: any iterable goes
+    const names = [...assets]
+    if (names.length === 0) return
 
     // S3 delete can handle up to 1000 objects at once
     const chunks = []
-    for (let i = 0; i < assets.length; i += 1000) {
-      chunks.push(assets.slice(i, i + 1000))
+    for (let i = 0; i < names.length; i += 1000) {
+      chunks.push(names.slice(i, i + 1000))
     }
 
     for (const chunk of chunks) {
@@ -278,8 +280,9 @@ export class AssetsS3 {
         Key: this.getKey(asset),
       }))
 
+      let result
       try {
-        await this.client.send(
+        result = await this.client.send(
           new DeleteObjectsCommand({
             Bucket: this.bucketName,
             Delete: {
@@ -289,6 +292,11 @@ export class AssetsS3 {
         )
       } catch (error) {
         throw new Error(`Failed to delete from S3: ${error.message}`)
+      }
+      // a batch answers 200 even when some keys fail: those come back in Errors
+      if (result.Errors?.length) {
+        const failed = result.Errors.map(e => `${e.Key} (${e.Code})`).join(', ')
+        throw new Error(`Failed to delete from S3: ${failed}`)
       }
     }
   }
